@@ -1,0 +1,84 @@
+!zone Intro
+.DEBUG_INTRO_START = *
+    
+cControlVFlags_Transition = %00011011
+cControlVFlags_Transition_InvalidMode = %01111011
+SetupIntroTransition:
+    lda vic_cborder
+    sta .vIntro_RestoreCBorder
+
+	ldx #<.Irq_VicIntroTransition
+	ldy #>.Irq_VicIntroTransition        
+	stx cpu_irq
+	sty cpu_irq+1
+
+;    This is probably unneccessary, any interrupt should work as long as its not line 256
+;    vline hi bit should be clear after reset..?
+;    lda #0
+;    sta vic_line
+;    lda #cControlVFlags_Transition
+;    sta vic_controlv
+
+	inc vic_irqmask	; Turn on raster interrupts
+    rts 
+        
+.Irq_VicIntroTransition:
+    sta zvIrqRestoreA
+    stx zvIrqRestoreX
+	sty zvIrqRestoreY
+    ldx $01
+	stx zvIrqRestore01    
+    lda #$35
+    sta $01
+    
+    lda vic_line
+    beq .Intro_TransitionToBlack
+
+.Intro_TransitionToScreen:
+.vIntro_RestoreCBorder = *+1
+    lda #0
+    ldx #cControlVFlags_Transition
+    ldy #22
+-   cpy cia2_ta_lo
+    bcc -
+    stx vic_controlv
+    sta vic_cborder
+    ldy #0
+    sty vic_line    
+    beq .Intro_Exit
+   
+.Intro_TransitionToBlack:
+    sta vic_cborder
+.vIntro_NextIrqLine = *+1
+    ldy #15
+.vIntro_NextIrqLineHi = *+1    
+    ldx #cControlVFlags_Transition_InvalidMode
+    bpl +
+    cpy #<301
+    bne +
+    sta vic_controlv    ; DEN off, Init Loops checks for that bit
+    beq .Intro_ExitPlay
++   iny
+    bne +
+    ldx #cControlVFlags_Transition_InvalidMode | 128
++   iny
+    stx .vIntro_NextIrqLineHi
+    stx vic_controlv
+    sty .vIntro_NextIrqLine
+    sty vic_line
+
+.Intro_ExitPlay: 
+    jsr NanoPlayer_Loop
+    
+.Intro_Exit:
+    asl vic_irq
+	ldx zvIrqRestore01
+    stx $01
+RTI_AXY:
+    lda zvIrqRestoreA   ; 3
+    ldx zvIrqRestoreX   ; 3
+    ldy zvIrqRestoreY   ; 3
+    rti                 ; 6 _71    spätestens 60@10
+
+!warn "Intro Start: ", .DEBUG_INTRO_START, " End: ", *, " Size: ", * - .DEBUG_INTRO_START
+    

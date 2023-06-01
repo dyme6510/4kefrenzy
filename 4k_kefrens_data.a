@@ -1,0 +1,80 @@
+
+DATA_Zeropage:
+    !byte cZPC_BF0, cZPC_BF1, cZPC_BF2, cZPC_BF3
+    !byte cZPC_FrontChars, cZPC_ColorBarChars, cZPC_ColorFrontChars, cZPC_ColorFrontChars
+    !byte cZPC_CG_OutLo, cZPC_CG_OutHi, cZPC_CG_In2Lo, cZPC_CG_In2Hi, cZPC_CG_SwitchOp, cZPC_CG_RtsPos    
+
+    ; zvScrollX, zvScrollX_Speed, zvScrollX_SpeedDst, zvScrollX_Delay0, zvScrollX_SpeedResume
+    !byte 0, 0, 0, 80, 16
+    
+cEOT_BigText = $80
+DATA_BigText:
+    !scr "Hello"
+    !byte cScrollLeft_CMD_Color + 2
+    !scr "AGAIN!  "
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "What'ya say dyme? Kefrens bars"
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a big-ass Scroller?  Now I've seen it all!    "
+    !byte cScrollLeft_CMD_Speed + 2
+    !byte cScrollLeft_CMD_Color + 6
+    !scr "NO!     "
+    !byte cScrollLeft_CMD_Speed + 8
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "There's also greetings!     "
+    !scr "some specs: "
+    !byte cScrollLeft_CMD_Color + 4
+DATA_BigText_Loop:
+    !scr "25 "    
+    !byte cScrollLeft_CMD_Speed + 6
+    !scr "Bars "
+    !byte cScrollLeft_CMD_Speed + 8
+    !byte cScrollLeft_CMD_Color + 4
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a 16 character lines horizontal scroller"
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a vertical sprite scroller (4 sprites per raster line)"
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a generic music player (with some randomization)"
+    !byte cScrollLeft_CMD_Color + 2
+    !scr "all in 4kb!        "
+    !byte cScrollLeft_CMD_Color + 4
+    !byte cEOT_BigText
+
+DATA_SpriteText:
+    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 47
+DATA_SpriteText_Loop:
+    !byte cSpriteText_SpaceCmd + 2
+    !byte cSpriteText_ColorCmd + 5
+    !scr "all the best and greetings to everybody makes the scene so great"
+    !byte cSpriteText_SpaceCmd + 8
+    !byte cSpriteText_ColorCmd + 3
+    !scr "desire"
+    !byte cSpriteText_ColorCmd + 6
+    !scr "atlantis"
+    !byte cSpriteText_ColorCmd + 9
+    !scr "onslaught"
+    !byte cSpriteText_ColorCmd + 2
+    !scr "panda design"
+    !byte cSpriteText_ColorCmd + 8
+    !scr "plush"
+    !byte cSpriteText_ColorCmd + 7
+    !scr "bonzai"
+    !byte cSpriteText_ColorCmd + 5
+    !byte cSpriteText_SpaceCmd + 12
+    !byte cSpriteScroll_EOT
+    
+!warn "SpriteText Length: ", * - DATA_SpriteText   

@@ -1,0 +1,138 @@
+.cTmpZP = cZeroPage_TemporaryStart
+.zvTextChar = .cTmpZP + 1
+.zvSineTmp = .cTmpZP + 2
+
+.DEBUG_SINETABLES_START = *
+
+GenerateSineTables:
+    ldy #$3f
+    ldx #$00
+.SineLoop:
+    ; Increase value by delta
+.vValueLo = *+1
+    lda #0
+    clc
+.vDeltaLo = *+1    
+    adc #0
+    sta .vValueLo
+.vValueHi = *+1
+    lda #0
+.vDeltaHi = *+1    
+    adc #0
+    sta .vValueHi
+ 
+    ; Store Value
+    sta pSin256Tab+$c0,x
+    sta pSin256Tab+$80,y
+    eor #$ff
+    sta pSin256Tab+$40,x
+    sta pSin256Tab+$00,y
+ 
+    ; Increase delta
+    lda .vDeltaLo
+    adc #$10
+    sta .vDeltaLo
+    bcc +
+    inc .vDeltaHi
++ 
+    inx : dey
+    bpl .SineLoop 
+ 
+.SineScale
+    ldx #0
+-   lda pSin256Tab,x
+    lsr
+    sta pSin128Tab,x
+    sta .zvSineTmp
+    lsr
+    sta pSin64Tab,x
+    lsr : clc
+    adc .zvSineTmp
+    sta pSin160Tab,x
+
+    lda .zvSineTmp
+    cmp #64
+    bcc +
+    eor #$FF
+    and #$3F
++   sta pScrollerYTab,x
+    
+    inx
+    bne -
+
+.SineBarTab
+    ldx #0
+    ldy #0
+-   lda pSin64Tab,x
+    lsr
+    clc
+    adc pSin64Tab,x
+    adc pSin128Tab,y
+    lsr 
+    sta .zvSineTmp
+    lsr
+    clc
+    adc .zvSineTmp
+    adc #8
+    sta pSinBarTab,y
+    txa
+    sbx #$FD
+    iny
+    bne -
+    
+.SpriteXTab
+    ldx #0
+
+-   lda pSin64Tab,x
+    lsr : lsr
+    clc
+    adc #28             ; hier noch kein carry
+    adc pSin256Tab,x
+    sta pSpriteXTabLo,x
+    tay
+    lda #%11111111
+    bcs ++
+    cpy #256-24
+    bcs +
+    and #%00000000
++   and #%10101010
+++  sta pSpriteXTabMsb,x
+    inx
+    bne -
+    
+    rts
+
+
+!warn "GenerateSineTables Start: ", .DEBUG_SINETABLES_START, " End: ", *, " Size: ", * - .DEBUG_SINETABLES_START
+
+
+.DEBUG_INITTEXTSCREEN_START
+    
+InitTextScreen:
+    ldy #25
+--  ldx #39
+    lda #cFirstVisibleBarChar+39
+    sta .zvTextChar
+-   lda .zvTextChar
+.wInitTextScreenAddr = *+1
+    sta pTextScreenBase,x
+    dec .zvTextChar
+    lda zvColorBarChars
+.wInitColorScreenAddr = *+1
+    sta $D800,x
+    dex
+    bpl -
+    lda .wInitTextScreenAddr
+    clc
+    adc #40
+    sta .wInitTextScreenAddr
+    sta .wInitColorScreenAddr
+    bcc +
+    inc .wInitTextScreenAddr+1
+    inc .wInitColorScreenAddr+1    
++   dey
+    bne --
+    rts
+
+!warn "InitTextScreen Start: ", .DEBUG_INITTEXTSCREEN_START, " End: ", *, " Size: ", * - .DEBUG_INITTEXTSCREEN_START
+    

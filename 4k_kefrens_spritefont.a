@@ -1,0 +1,240 @@
+
+!zone BuildSpriteFont
+
+.pCharacterSpriteBase = pSpriteBase
+.cMaxSpriteCount = cMaxFontSprites
+
+; 768b temp memory
+.pTempDataScratchPad = pSharedTmpData
+!if (cSharedTmpDataSize < 768){
+    !error "at least 768b ScratchPad-Memory needed"
+}
+
+.cTmpZP = cZeroPage_TemporaryStart
+.zvMask = .cTmpZP + 0
+.zvLine = .cTmpZP + 1
+.zvTestBit = .cTmpZP + 2
+.zvRestore01 = .cTmpZP + 3
+.zvRestoreX = .cTmpZP + 4
+.zvRestoreY = .cTmpZP + 5
+
+.zpOutLine = .cTmpZP + 6;+7
+
+.pLineBrightnessCountUL = .pTempDataScratchPad
+.pLineBrightnessCountLL = .pLineBrightnessCountUL + 128
+.pLineBrightnessCountUR = .pLineBrightnessCountLL + 128
+.pLineBrightnessCountLR = .pLineBrightnessCountUR + 128
+.pLineSolidFlag = .pLineBrightnessCountLR + 128
+.pLineTouchedFlag = .pLineSolidFlag + 128
+
+.DEBUG_SPRITESCROLLSTART = *
+
+BuildSpriteFont:
+    lda $01
+    sta .zvRestore01
+    lda #$31
+    sta $01
+
+.InitFontCharacterCreation:
+    ldx #>.pCharacterSpriteBase
+.StartNextCharacter
+    stx .zpOutLine+1
+
+.ClearScratchPadAndSprite:
+    lda #0
+    sta .zpOutLine
+    tay
+-   sta .pTempDataScratchPad,y
+    sta .pTempDataScratchPad+256,y
+    sta .pTempDataScratchPad+512,y
+    sta (.zpOutLine),y
+    dey
+    bne -
+
+.FillCharScratchPad:
+    ldx #14+20          ; offset all by 20 so exit condition can be bpl (>= 128) instead of x=110
+.NextLine:
+    stx .zvLine
+    ldy #1              ; "First set pixel"-Marker
+.pCurrentCharLine = *+1
+    lda $D000
+    beq .SkipLine ; there is no used Character with a line %10000000, we ignore the first pixel
+.NextBit:
+    bpl ++                              ; 10b
+
+    dey
+    bne +
+    dex : dex                           ; Expand first set pixel to 3 pixels width
+    jsr .MarkScratch                    ; curiously, 3 instead of 2 pixels even saves 4 bytes when packed
+    inx
+    jsr .MarkScratch
+    inx
++   jsr .MarkScratch
+++  inx
+    asl
+    bne .NextBit                        ; 4b
+
+    jsr .MarkScratch                    ; Duplicate last set pixel
+    inx ; irrelevant opcode but packs better (actually saves 1b)
++
+.SkipLine:
+    inc .pCurrentCharLine
+    bne +
+    inc .pCurrentCharLine+1
++   lax .zvLine
+    sbx #-12
+    bpl .NextLine                       ; 14b
+
+; X: position in Scratchpad
+; Y: position in Sprite block
+.WriteScratchPadToSprites:
+    ldx #0
+    stx .zvLine
+    lda #$F0
+    sta .zvMask
+    ldy #3
+
+.EvalPixel:
+    stx .zvRestoreX
+    lda .pLineSolidFlag,x
+    beq +
+
+.PaintSolidPixel:
+    ldx .zvLine
+    bne .PaintPixel ; always taken: solid gibts nicht in der ersten line
+
++   lda .pLineTouchedFlag,x
+    beq .SkipPixel
+
+    jsr .EvalNibbleX
+    sta .pSolidPixelFill_1
+    sta .pSolidPixelFill_2
+    txa
+    eor #$80
+    tax
+    jsr .EvalNibbleX
+    sta .pSolidPixelFill_3
+    sta .pSolidPixelFill_4
+    ldx #0
+
+.PaintPixel:
+    sty .zvRestoreY
+-   lda .pSolidPixelFill_1,x
+    and .zvMask
+    ora (.zpOutLine),y
+    sta (.zpOutLine),y
+    txa
+    sbx #-9 ; clears carry
+    iny : iny : iny
+    cpx #36
+    bcc -
+    ldx .zvRestoreX
+    ldy .zvRestoreY
+
+.SkipPixel:
+    inx
+    cpx #120
+    beq .EndBlitSprite
+
+    lda .zvMask
+    eor #$FF
+    sta .zvMask
+    bpl .EvalPixel ; Same Byte
+    tya
+    cpy #117
+    bne +
+    adc #64 ;+C
++   clc
+.pCurrentAdvanceOffset = *+1
+    adc .pSpriteAdvanceXOffsetMap+5
+    tay
+    bcc + ; Carry, wenn new line
+    inc .zvLine
+    lda #<.pSpriteAdvanceXOffsetMap+6
+    sta .pCurrentAdvanceOffset
++   dec .pCurrentAdvanceOffset
+    bne .EvalPixel
+
+.EndBlitSprite:
+    lda #<.pSpriteAdvanceXOffsetMap+5
+    sta .pCurrentAdvanceOffset
+    ldx .zpOutLine+1
+    inx
+    cpx #(>.pCharacterSpriteBase) + .cMaxSpriteCount
+    beq +
+    jmp .StartNextCharacter
++   lda .zvRestore01
+    sta $01
+    rts
+
+.EvalNibbleX:
+    lda #%01010101
+.EvalUL:
+    asl .pLineBrightnessCountUL,x ; wird LL für x >= 128
+    beq ++
+    bcs +
+    and #%00110011
++   ora #%10001000
+++  asl .pLineBrightnessCountUR,x ; wird LR für x >= 128
+    beq ++
+    bcs +
+    and #%11001100
++   ora #%00100010
+++  rts
+
+
+
+
+.pSpriteAdvanceXOffsetMap:
+    !byte -54, 1, 1, 62, 1, 1
+!if >* != >.pSpriteAdvanceXOffsetMap {
+    !error "align error: (", *, ") <-> (", .pSpriteAdvanceXOffsetMap, ")"
+}
+!if >* < (*-.pSpriteAdvanceXOffsetMap) {
+    !error "0 as position is forbidden due to dec : bne .EvalPixel"
+}
+;; 00-BG  01-MC0 10-SC 11-MC1
+; in Zeile 0 gibts keine Solid Pixel, also wird Line0 als das berechnete für die Outer benutzt
+;.pSolidPixelFill_1:  !byte 0, %WWWW, %WHWH, %WHWH, %WWWW, %WWWW, %BWBW, %BWBW, %WWWW
+;.pSolidPixelFill_2:  !byte 0, %HWHW, %HHHH, %HWHW, %WWWW, %WBWB, %BBBB, %WBWB, %WWWW
+;.pSolidPixelFill_3:  !byte 0, %WHWH, %HHHH, %WHWH, %WWWW, %BWBW, %BBBB, %BWBW, %WWWW
+;.pSolidPixelFill_4:  !byte 0, %HWHW, %HWHW, %WWWW, %WWWW, %WBWB, %WBWB, %WWWW, %WWWW ;36b
+
+.pSolidPixelFill_1:  !byte 0, %01010101, %01100110, %01100110, %01010101, %01010101, %11011101, %11011101, %01010101
+.pSolidPixelFill_2:  !byte 0, %10011001, %10101010, %10011001, %01010101, %01110111, %11111111, %01110111, %01010101
+.pSolidPixelFill_3:  !byte 0, %01100110, %10101010, %01100110, %01010101, %11011101, %11111111, %11011101, %01010101
+.pSolidPixelFill_4:  !byte 0, %10011001, %10011001, %01010101, %01010101, %01110111, %01110111, %01010101, %01010101 ;36b
+
+
+.MarkScratch:
+    inc .pLineTouchedFlag-20-13,x
+    inc .pLineBrightnessCountLR-20-13,x
+
+    inc .pLineTouchedFlag-20-12,x
+    inc .pLineBrightnessCountLL-20-12,x
+    inc .pLineBrightnessCountLR-20-12,x
+
+    inc .pLineTouchedFlag-20-11,x
+
+    inc .pLineTouchedFlag-20-1,x
+    inc .pLineBrightnessCountUR-20-1,x
+    inc .pLineBrightnessCountLR-20-1,x
+
+    inc .pLineSolidFlag-20,x
+
+    inc .pLineTouchedFlag-20+1,x
+    dec .pLineBrightnessCountUL-20+1,x
+    dec .pLineBrightnessCountLL-20+1,x
+
+    inc .pLineTouchedFlag-20+11,x
+
+    inc .pLineTouchedFlag-20+12,x
+    dec .pLineBrightnessCountUL-20+12,x
+    dec .pLineBrightnessCountUR-20+12,x
+
+    inc .pLineTouchedFlag-20+13,x
+    dec .pLineBrightnessCountUL-20+13,x
+    rts                                 ;_58b
+
+!warn "BuildSpriteFont Start: ", .DEBUG_SPRITESCROLLSTART, " End: ", *, " Size: ", * - .DEBUG_SPRITESCROLLSTART
+

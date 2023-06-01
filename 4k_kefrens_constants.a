@@ -1,0 +1,169 @@
+;;
+;; Speicheraufteilung:
+;;
+;; Video-Bank 1 $4000-$7FFF
+;;
+;;   TextScreen $7C00 - $7FE7
+;;     Davon werden die Zeilen 9,11,13,15,17,19,21,23 nicht verwendet:
+;;          $7D68-$7D8F, $7DB8-$7DDF, $7E08-$7E2F, $7E58-$7E7F, $7EA8-$7ECF, $7EF8-$7F1F, $7F48-$7F6F, $7F98-$7FBF 
+;;   SpritePtr $7FF8 - $7FFF
+;;   Charset: $7800 - $7FFF: nur chars 0-127 verwenden
+;;     Column-Chars: $7A00 - $7BFF, (64 Chars) davon müssen nur 39 gelöscht und nur 45 beschrieben werden
+;;     FrontScroller-Chars: 4*8 Bytes, können noch in $7F98-$7FBF gequetscht werden
+;;   SpriteData $4000 - $79FF: Platz für 58 2x2 Sprites
+;;
+
+;; ************************************************
+;; ******************  VIC-BANK  ******************
+;; ************************************************
+cVicBankIndex = 1;
+cVicBancStart = $4000 * cVicBankIndex
+
+pSpriteBase = cVicBancStart
+cMaxSpriteDataCount = 232
+cMaxFontSprites = (cMaxSpriteDataCount/4) ; 58 Characters: @A-9
+
+pBarCharsetBase = cVicBancStart + $3800
+pBarCharBase = cVicBancStart + $3A00
+cFirstVisibleBarChar = ((pBarCharBase - pBarCharsetBase) / 8) + 4
+
+
+pTextScreenBase = cVicBancStart + $3C00
+
+; 16 bytes: 2 characters for the big scroller
+pScrollerCharData1 = cVicBancStart + $3FA0
+pScrollerCharData2 = cVicBancStart + $3FA8
+cScrollerChar1 = ((pScrollerCharData1 - pBarCharsetBase) >> 3)
+cScrollerChar2 = ((pScrollerCharData2 - pBarCharsetBase) >> 3)
+
+
+;; ************************************************
+;; ******************  Zeropage  ******************
+;; ************************************************
+!zone MEMORY_ZeroPage
+
+cZeroPage_Start = $60
+
+;; PERSISTENT DATA
+cZeroPage_PersistentStart = cZeroPage_Start
+.zP = cZeroPage_PersistentStart
+
+zvVicControlV = .zP + 0
+zvVicControlVForcedBL = .zP + 1
+zpBarXPos = .zP + 2 ; -> 28
+zpBarSinTab = .zP + 29;30
+
+doSpritesJmp = .zP + 31
+zpDoSprites = .zP + 32;33
+zvSpriteRow = .zP + 34
+zvSpriteRowStart  = .zP + 35
+zvSpriteY = .zP + 36
+zvNOP = .zP + 37
+zvCurrentColorFrontChars = .zP + 38
+
+zvScrollY = .zP + 39
+zvAnimationFrameCounter = .zP + 40
+
+cZeroPage_PersistentInitialized = .zP + 41
+
+.zPI = cZeroPage_PersistentInitialized
+;; Zeropage mit default-Werten, die über einfaches MEMCPY initialisiert werden sollen
+zpBF_NewCode = .zPI + 0;1
+zpBF_JmpData = .zPI + 2;3
+zvFrontChars = .zPI + 4
+zvColorBarChars = .zPI + 5
+zvStartColorCmd = .zPI + 6
+zvQueuedColorCmd = .zPI + 7
+zpCG_Out = .zPI + 8;9
+zpCG_In2 = .zPI + 10;11
+zpCG_SwitchOp = .zPI + 12
+zpCG_RtsPos = .zPI + 13
+
+zvScrollX = .zPI + 14        ; Scrolling in X-Richtung 0-15, wird zur Darstellung auf 0,2,4,6 abgebildet
+zvScrollX_Speed = .zPI + 15
+zvScrollX_SpeedDst = .zPI + 16    ; Zielgeschwindigkeit, wird schrittweise angepasst
+zvScrollX_Delay0 = .zPI + 17 ; Dauer, für die in Geschwindigkeit 0 verblieben werden soll
+zvScrollX_SpeedResume = .zPI + 18 ; Geschwindigkeit, auf die nach dem Delay wieder hochgeregelt werden soll
+
+zvBars_StartIndex = .zPI + 19
+
+cZeroPage_PersistentEnd = .zPI + 20
+
+
+;; IRQ DATA (Persistent or single Frame)
+cZeroPage_IrqStart = cZeroPage_PersistentEnd
+.zI = cZeroPage_IrqStart
+
+zvIrqRestoreStack = .zI + 0
+zvIrqRestoreA = .zI + 1
+zvIrqRestoreX = .zI + 2
+zvIrqRestoreY = .zI + 3
+zvIrqRestore01 = .zI + 4
+cZeroPage_IrqEnd = .zI + 5
+
+;; PERSISTENT BIG SCROLLER DATA
+cZeroPage_BigScrollerStart = cZeroPage_IrqEnd
+cZeroPage_BigScrollerEnd = cZeroPage_BigScrollerStart + 6
+
+;; PERSISTENT COLUMNS DATA
+cZeroPage_ColumnsStart = cZeroPage_BigScrollerEnd
+cZeroPage_ColumnsEnd = cZeroPage_ColumnsStart + 13
+
+
+;; TEMPORARY DATA
+cZeroPage_TemporaryStart = cZeroPage_ColumnsEnd
+
+;; *********************************************
+;; ******************  Stack  ******************
+;; *********************************************
+!zone MEMORY_Stack
+
+cBigFontStackBase = 0
+cBigFontStackEnd = cBigFontStackBase + 48
+
+cBarSpriteRtsStackBase = cBigFontStackEnd
+cBarSpriteRtsStackEnd = cBarSpriteRtsStackBase + 64
+
+
+;; ******************************************************
+;; ******************  GENERATED DATA  ******************
+;; ******************************************************
+!zone MEMORY_Data
+
+pSineTablesStart = $3000
+pSin256Tab = pSineTablesStart + $0000
+pSin64Tab  = pSineTablesStart + $0100
+pSin160Tab = pSineTablesStart + $0200
+pSin128Tab = pSineTablesStart + $0300
+pSinBarTab = pSineTablesStart + $0400
+pSpriteXTabLo = pSineTablesStart + $0500
+pSpriteXTabMsb = pSineTablesStart + $0600
+pScrollerYTab = pSineTablesStart + $0700
+
+pSpriteCurrentDataTables = $3800 ; Data,X,X2,Color,ColorComp
+pMusicDataStart = $3D00
+
+cBarCodeSize = 3244 + 937 + 183 + 8*cBigScroll_ChangeColorCodeSize + 8*cBigScroll_ChangeColorOpSize
+pBarCodeStart = $9000 + $37; adjust to avoid Page bound crossing branches
+DoClearBarCharacters = pBarCodeStart + 3244
+DoAnimateBars = DoClearBarCharacters + 937
+BigScroll_ChangeColorCode0 = DoAnimateBars + 183
+
+!warn "DoClearBarCharacters: ", DoClearBarCharacters
+!warn "DoAnimateBars: ", DoAnimateBars
+!warn "BigScroll_ChangeColorCode0: ", BigScroll_ChangeColorCode0
+
+cBigScroll_ChangeColorCodeSize = 7
+BigScroll_ChangeColorOp0 = BigScroll_ChangeColorCode0 + 8*cBigScroll_ChangeColorCodeSize
+cBigScroll_ChangeColorOpSize = 10
+pBarCodeEnd = pBarCodeStart + cBarCodeSize 
+
+pBigFontMemoryStart = (pBarCodeEnd + $FF) & $FF00
+cBigFontMemorySize = $1B02
+pBigFontMemoryEnd = pBigFontMemoryStart + cBigFontMemorySize
+
+
+pSharedTmpData = $8000
+cSharedTmpDataSize = $400
+
+

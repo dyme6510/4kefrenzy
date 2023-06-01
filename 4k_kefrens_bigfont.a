@@ -1,0 +1,516 @@
+; worst-case timing: 3*lda zp, 1*lda abs,x, 8*sta abs,x +2*dex + ret -> 63
+;   * 20 -> 1260
+; + prepare(94) + jsr(6) + wrap(14) + retFromStack(11) : overhead = 125  -> 1381
+; blank timing: 10*20 + overhead = 325
+
+!zone BuildBigFont
+
+cZPC_BF0 = <(pCharColumnCode-1)
+cZPC_BF1 = >(pCharColumnCode-1)
+cZPC_BF2 = <pCharColumnSequence
+cZPC_BF3 = >pCharColumnSequence
+
+cScrollLeft_CMD_Color = $68
+cScrollLeft_CMD_EOT = $80
+cScrollLeft_CMD_Speed = $80 ; +Speed (1-8)
+cScrollLeft_CMD_Pause224 = $F0 ; + Resume Speed (1-8)
+cScrollLeft_CMD_Pause192 = $E0 ; + Resume Speed (1-8)
+cScrollLeft_CMD_Pause128 = $C0 ; + Resume Speed (1-8)
+cScrollLeft_CMD_Pause64 = $A0 ; + Resume Speed (1-8)
+cScrollLeft_CMD_Pause32 = $90 ; + Resume Speed (1-8)
+
+.cTmpZP = cZeroPage_TemporaryStart
+.zColumsToGo = .cTmpZP + 0
+.zCurrentBits = .cTmpZP + 1
+.zPrevBits = .cTmpZP + 2
+.zChangedBits = .cTmpZP + 3
+.zNewSetBits = .cTmpZP + 4
+.zNewClearBits = .cTmpZP + 5
+.zLine = .cTmpZP + 6 ; 6789ABCD - 13
+
+zCheckBits = .cTmpZP + 14
+zLo = .cTmpZP + 15
+zHi = .cTmpZP + 16
+
+; tmp Data
+.pIndexSetBits = pSharedTmpData
+.pIndexClearBits = pSharedTmpData + $100
+.pIndexCodeLo = pSharedTmpData + $200
+.pIndexCodeHi = pSharedTmpData + $300
+!if (cSharedTmpDataSize < $400){
+    !error "MEMORY TEMPDATA INCORRECT"
+}
+
+
+; out data
+pCharDataLen = pBigFontMemoryStart + $0000 ; - $005B ; nur die Zeichen von @ab...Z = 90 = $5A
+pCharDataLo = pBigFontMemoryStart + $0080;  - $00DB
+pCharDataHi = pBigFontMemoryStart + $0100 ; - $015B 
+pCharColumnSequence = pBigFontMemoryStart + $0200 ; - $06BE
+pCharColumnCode = pBigFontMemoryStart + $0700     ; $1401b length
+
+.cLastCharIndex = 90
+
+.pTextStart = DATA_BigText
+.pScreenLine0 = pTextScreenBase + (8 * 40)
+.pColorLine0 = $d800 + (8 * 40)
+
+.cBigZP = cZeroPage_BigScrollerStart
+.zvBigFontStackStart = .cBigZP
+.zvBigFontStackExit = .cBigZP + 1
+.zvStackStartX = .cBigZP + 2
+.zvNextCommandOffset = .cBigZP + 3
+.zpCurrentCharCode = .cBigZP + 4;5
+!if (cZeroPage_BigScrollerEnd < .cBigZP + 6){
+    !error "MEMORY ZEROPAGE INCORRECT"
+}
+
+
+!macro WriteCodeA {
+    sta (zpBF_NewCode),y
+    iny
+}
+!macro WriteCode i{
+    lda #i
+    sta (zpBF_NewCode),y
+    iny
+}
+!macro WriteCodeInd i{
+    lda i
+    sta (zpBF_NewCode),y
+    iny
+}
+!macro WriteCode8 i, b{
+    lda #i
+    sta (zpBF_NewCode),y
+    iny
+    lda #b
+    sta (zpBF_NewCode),y
+    iny
+}
+!macro WriteCode16 i, w{
+    lda #i
+    sta (zpBF_NewCode),y
+    iny
+    lda #<w
+    sta (zpBF_NewCode),y
+    iny
+    lda #>w
+    sta (zpBF_NewCode),y
+    iny
+}
+
+!macro CommitY ptr{
+    tya
+    clc
+    adc ptr
+    sta ptr
+    bcc +
+    inc ptr+1
++
+}
+
+.DEBUG_BUILDBIGFONT_START = *
+
+CheckWriteStaColorSeqToCode:
+    lda #>(.pColorLine0-cFirstVisibleBarChar)
+    sta zHi
+    bne .CheckWriteStaSeqToCode_Enter
+
+CheckWriteStaScreenSeqToCode:
+    lda #>(.pScreenLine0-cFirstVisibleBarChar)
+    sta zHi
+    
+.CheckWriteStaSeqToCode_Enter:
+    lda #<(.pScreenLine0-cFirstVisibleBarChar) ; same for .pColorLine0 and .pScreenLine0
+    sta zLo
+    bne .CheckWriteStaSeqToCode
+
+-   lda zLo
+    adc #80
+    sta zLo
+    bcc +
+    inc zHi
+.CheckWriteStaSeqToCode:
++   asl zCheckBits
+    bcc +
+    +WriteCode opcode_STA_16X
+    +WriteCodeInd zLo
+    +WriteCodeInd zHi
+    clc
++   bne - ; WriteCode ends with iny which never is 0
+    rts
+
+
+    
+!macro CheckWriteStaScreenSeq c{
+    lda c
+    sta zCheckBits
+    jsr CheckWriteStaScreenSeqToCode
+}
+
+!macro CheckWriteStaColorSeq c{
+    lda c
+    sta zCheckBits
+    jsr CheckWriteStaColorSeqToCode
+}
+
+
+InitBigScroller:
+.InitFontStack:
+    ldx #.cMaxFontStackPos+1
+    ldy #5
+-   lda .pInitialStackData,y
+    sta .pBigFontStackBase,x
+    dey
+    bpl +
+    ldy #1
++   dex
+    bpl -
+
+    lda #.cMaxFontStackPos - (21*2)
+    sta .zvBigFontStackStart
+    lda #.cMaxFontStackPos - 2
+    sta .zvBigFontStackExit    
+    ldx #0
+    stx .zvNextCommandOffset
+    ldx #41 + cFirstVisibleBarChar
+    stx .zvStackStartX
+    
+.BuildCodeForCharacter:
+    ; copy character into zLine 0-7
+    ldx #8
+    stx .zColumsToGo ; 9 spalten untersuchen; manche Chars belegen auch die letzte Spalte
+    dex
+    ldy $01
+    lda #$31
+    sta $01
+.pCharData = *+1    
+-   lda $D800,x     ; Charset 2
+    sta .zLine,x
+    dex
+    bpl -    
+    sty $01
+    
+    ; set zCurrent to 0
+    lda #0
+    sta .zCurrentBits
+
+.GatherOneColumn:
+    lda .zCurrentBits
+    sta .zPrevBits
+.SkipColumn:    
+    lda #0
+    ldx #7
+-   asl .zLine,x
+    ror
+    dex
+    bpl -
+    sta .zCurrentBits
+    tax
+    bne +
+    dec .zColumsToGo
+    bpl .SkipColumn ; Leere Spalten (ausser letzte) verwerfen
++   eor .zPrevBits
+    sta .zChangedBits
+    sax .zNewSetBits
+    txa
+    eor #$FF
+    and .zChangedBits   ; a: Newly cleared Bits
+    sta .zNewClearBits
+    
+.FindExistingIndex:    
+    ldx #$FF
+-   inx
+.vNextNewIndexLo = *+1
+    cpx #0
+    beq .AddNewIndex
+    cmp .pIndexClearBits,x
+    bne -
+    ldy .pIndexSetBits,x
+    cpy .zNewSetBits
+    bne -
+    
+.WriteIndexToChar:
+.vCharOut = *+1
+    ldy #0
+    lda .pIndexCodeLo,x
+    sta (zpBF_JmpData),y
+    iny
+    lda .pIndexCodeHi,x
+    sta (zpBF_JmpData),y
+    iny
+    sty .vCharOut
+
++   dec .zColumsToGo
+    bpl .GatherOneColumn
+
+.FinalizeChar:
+    ldy .vCharOut
+
+.vCharIndex = *+1
+    ldx #0
+    lda zpBF_JmpData
+    sta pCharDataLo,x
+    lda zpBF_JmpData+1
+    sta pCharDataHi,x
+    tya
+    sec
+    sbc #2
+    sta pCharDataLen,x
+    +CommitY zpBF_JmpData
+    ldy #0
+    sty .vCharOut
+
+.SelectNextChar:
+    lda .vCharIndex
+    cmp #.cLastCharIndex ; 'Z', den Rest brauchen wir nicht... aber vielleicht das herz noch?
+    bne +
+    jmp .BuildFont_Exit
++   inc .vCharIndex
+    lda .pCharData
+    clc
+    adc #8
+    sta .pCharData
+    bcc +
+    inc .pCharData+1
++   jmp .BuildCodeForCharacter
+
+.AddNewIndex:   ; A is newly cleared bits
+    lda .zNewClearBits
+    sta .pIndexClearBits,x
+    lda zpBF_NewCode
+    sta .pIndexCodeLo,x
+    lda zpBF_NewCode+1
+    sta .pIndexCodeHi,x
+    
+    ldy #1 ; ptr to new code
+    lda #opcode_DEX
+    +WriteCodeA
+    +WriteCodeA
+    lda .zNewSetBits
+    sta .pIndexSetBits,x    
+    beq ++
+    +WriteCode8 opcode_LDA_8, zvFrontChars    
+    +CheckWriteStaScreenSeq .zNewSetBits
+    +WriteCode8 opcode_LDA_8, zvCurrentColorFrontChars
+    +CheckWriteStaColorSeq .zNewSetBits
+++  lda .zNewClearBits
+    beq ++
+    +WriteCode opcode_TXA    ;; char<->x is fix, adjust pFirstRows to ensure X=32-63 are centered
+    +CheckWriteStaScreenSeq .zNewClearBits
+    +WriteCode8 opcode_LDA_8, zvColorBarChars
+    +CheckWriteStaColorSeq .zNewClearBits
+++
+    +WriteCode opcode_RTS
+    dey
+    +CommitY zpBF_NewCode
+
+    inc .vNextNewIndexLo
+    jmp .WriteIndexToChar ; X is still the old vNextNewIndexLo
+
+.BuildFont_Exit:
+    ; $20 - 'space' korrigieren
+    lda #<.pCharDataSpace
+    sta pCharDataLo + 32
+    lda #>.pCharDataSpace
+    sta pCharDataHi + 32
+    lda #.cCharWidthSpace
+    sta pCharDataLen + 32
+
+.cLastChangeColorOp = BigScroll_ChangeColorOp0+(7*cBigScroll_ChangeColorOpSize)
+!if (>BigScroll_ChangeColorOp0 != >.cLastChangeColorOp){
+    !error "Illegal Pagebreak"
+}
+    ldy #7
+    ldx #(<BigScroll_ChangeColorOp0+(7*cBigScroll_ChangeColorOpSize))
+-   lda #.cCharWidthSpace
+    sta pCharDataLen + cScrollLeft_CMD_Color,y
+    lda #>BigScroll_ChangeColorOp0
+    sta pCharDataHi + cScrollLeft_CMD_Color,y
+    txa
+    sta pCharDataLo + cScrollLeft_CMD_Color,y
+    sbx #cBigScroll_ChangeColorOpSize
+    dey
+    bpl -
+    rts
+
+!warn "BuildBigFont Start: ", .DEBUG_BUILDBIGFONT_START, " End: ", *, "  Size: ", * - .DEBUG_BUILDBIGFONT_START
+
+.DEBUG_SCROLLEFT_START = *
+    
+; Der Stackbereich $0100 - $0130 als Font-Drawcalls benutzen
+; jedes RTS addiert ERST 2 zum SP, dann wird der PC geladen
+; $012E und $012F sind für den wraparound-Code 
+; um auch $0100 als code nutzen zu können wird erst vor dem
+; ersten rts in InvokeFontStack nochmal 2 von zvBigFontStackStart abgezogen
+
+.pBigFontStackBase = $0100 + cBigFontStackBase
+.pBigFontStackFirstCode = .pBigFontStackBase + 2
+.cMaxFontStackPos = $2E ;(46)
+.pBigFontStackEnd = .pBigFontStackBase + .cMaxFontStackPos + 2
+!if( (.pBigFontStackEnd - .pBigFontStackBase) != cBigFontStackEnd ){
+    error "STACK MEMORY INCORRECT"
+}
+
+; Bitmaps für die 2 Zeichen breiten "Pixel" des Scrollers
+.pScrollerCharData:
+    !byte %11010101,%10111111,%10111111,%10101010
+    !byte %01010101,%11111101,%11111101,%10101011
+    !byte %11010101,%10111111,%10111111,%10101010
+
+; ohne spezielles delay-cmd:
+ScrollLeft:
+    ; Swap Char Bitmaps
+.vSwapScrollerCharsX = *+1
+    ldx #4
+    ldy #6
+-   lda .pScrollerCharData,x        ; 4
+    sta pScrollerCharData1 + 0,y    ; 5
+    sta pScrollerCharData1 + 1,y    ; 5
+    lda .pScrollerCharData + 4,x    ; 4
+    sta pScrollerCharData2 + 0,y    ; 5
+    sta pScrollerCharData2 + 1,y    ; 5
+    inx : dey : dey                 ; 6
+    bpl -                           ; _37 __147
+    txa
+    and #7
+    sta .vSwapScrollerCharsX        ;__159 für swap chars
+    
+ScrollLeft_NoCharSwap:
+    ; Switch zvFrontChars - Character
+    lda zvFrontChars
+.zvScrollerCharacter1Eor2 = *+1
+    eor #(cScrollerChar1 XOR cScrollerChar2)
+    sta zvFrontChars    
+    
+    lda .zvStackStartX              ; 3
+    eor #1                          ; 2
+    sta .zvStackStartX              ; 3
+    lsr                             ; 2
+    bcc .ScrollLeft0                ; 2/3
+    
+.ScrollLeft1:                       ;  _12
+    lax .zvBigFontStackExit
+    sbx #2
+    bpl +
+    ldx #.cMaxFontStackPos-2
++   stx .zvBigFontStackExit        ;11-12
+
+    lda #<.ReturnFromStackCode
+    sta .pBigFontStackBase,x
+    lda #>.ReturnFromStackCode
+    sta .pBigFontStackBase+1,x         ;12
+
+    lax .zvBigFontStackStart
+    sbx #2
+    bpl +
+    ldx #.cMaxFontStackPos-2
++   stx .zvBigFontStackStart       ;11-12
+
+    ldy .zvNextCommandOffset    ; 3
+    lda (.zpCurrentCharCode),y  ; 5
+    sta .pBigFontStackBase,x    ; 5
+    iny                         ; 2
+    lda (.zpCurrentCharCode),y  ; 5
+    sta .pBigFontStackBase+1,x  ; 5
+
+    lda zvQueuedColorCmd        ; 3
+    sta zvStartColorCmd         ; 3
+    
+.InvokeFontStack:               ; -> __71-73
+    sta zvCurrentColorFrontChars
+    tsx
+    stx zvIrqRestoreStack
+    ldx .zvBigFontStackStart
+    dex
+    txs
+    ldx .zvStackStartX
+    rts
+
+.ScrollLeft0:                       ;  _13
+    ; load next text command
+    ldy .zvNextCommandOffset        ; 3
+.vCurrentCharCodeLength = *+1    
+    cpy #0                          ; 2
+    bne .ScrollLeft_IncOffset       ; 2/3
+.ScrollLeft_IncText:    ;_20
+.pCurrentTextPtr = *+1
+    ldy .pTextStart                 ; 4
+    bmi .ScrollLeft_CMD             ; 2/3
+    cpy #cScrollLeft_CMD_Color
+    bcc .ScrollLeft_Char
+    sty zvQueuedColorCmd
+    ldy zvStartColorCmd    
+.ScrollLeft_Char:
+    inc .pCurrentTextPtr            ; 6
+    bne .ScrollLeft_LoadNextChar    ; 2/3
+    inc .pCurrentTextPtr+1          ; 6 -> _16-21
+.ScrollLeft_LoadNextChar:
+    lda pCharDataLo,y               ; 4
+    sta .zpCurrentCharCode          ; 3
+    lda pCharDataHi,y               ; 4
+    sta .zpCurrentCharCode+1        ; 3
+    lda pCharDataLen,y              ; 4
+    sta .vCurrentCharCodeLength     ; 4
+    ldy #$0                         ; 2 _24 __59-67
+.ScrollLeft_Exit:    
+    sty .zvNextCommandOffset        ; 3
+    lda zvStartColorCmd             ; 3    
+    jmp .InvokeFontStack            ; 3
+.ScrollLeft_IncOffset:
+    iny : iny                       ; 4
+    bne .ScrollLeft_Exit            ; 3
+
+.ScrollLeft_CMD:
+    tya
+    asl
+    beq .ScrollLeft_CMD_EOT
+    ldx #$1F
+    cmp #17
+    bcc .ScrollLeft_CMD_Speed
+.ScrollLeft_CMD_Pause:
+    sax zvScrollX_SpeedResume
+    ldx #$E0
+    sax zvScrollX_Delay0
+    lda #0
+.ScrollLeft_CMD_Speed:
+    sax zvScrollX_SpeedDst
+    ldy #32
+    bne .ScrollLeft_Char
+.ScrollLeft_CMD_EOT:        ;_27
+    lda #<DATA_BigText_Loop         ; 2
+    sta .pCurrentTextPtr            ; 4
+    lda #>DATA_BigText_Loop         ; 2
+    sta .pCurrentTextPtr+1          ; 4
+    ldy .pTextStart                 ; 4
+    bne .ScrollLeft_LoadNextChar    
+
+
+.BigFontCode_NOP = BigScroll_ChangeColorCode0+3
+.pCharDataSpace:
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+.cCharWidthSpace = * - .pCharDataSpace
+.pInitialStackData:
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.ReturnFromStackCode, >.ReturnFromStackCode
+    !byte <.WrapBigFontStack, >.WrapBigFontStack
+
+.ReturnFromStackCode_impl:
+    ldx zvIrqRestoreStack
+    txs
+    rts
+.ReturnFromStackCode = .ReturnFromStackCode_impl-1
+
+.WrapBigFontStack_impl:
+    txa
+    ldx #$FF
+    txs
+    tax
+    rts
+.WrapBigFontStack = .WrapBigFontStack_impl-1
+
+!warn "ScrollLeft Start: ", .DEBUG_SCROLLEFT_START, " End: ", *, "  Size: ", * - .DEBUG_SCROLLEFT_START

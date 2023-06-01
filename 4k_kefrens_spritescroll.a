@@ -1,0 +1,525 @@
+
+!zone SpriteScroll
+
+FEAT_PULSESPRITECOLOR = 0
+
+.DEBUG_SPRITESCROLL_START = *
+
+; Tmp Variables during Code Creation:
+.cTmpZP = cZeroPage_TemporaryStart
+.zvTmpSpriteMsb = .cTmpZP + 0
+.zvTmpColor = .cTmpZP + 1
+.zvTmpSpaces = .cTmpZP + 2
+.zvTmpColorSpaces = .cTmpZP + 3
+
+pSpriteData = pSpriteCurrentDataTables
+pSpriteCommand = pSpriteData + $100
+pSpriteX = pSpriteCommand + $100
+pSpriteMsbX = pSpriteX + $100
+pSpriteColor = pSpriteMsbX + $100
+!if (FEAT_PULSESPRITECOLOR = 1){
+    pSpriteColor_Comp = pSpriteColor + $100
+    pSpriteCurrentDataTablesEnd = pSpriteColor_Comp + $100
+}else{
+    pSpriteCurrentDataTablesEnd = pSpriteColor + $100
+}
+
+.pSpritePtr0 = pTextScreenBase+1016
+
+cSpriteScroll_Space = 32*4
+
+
+;; jeder Aufruf benötigt insgesamt 52 cycles! Muss!
+;; Aufruf : jmp (zpDoSprites), kehrt mit rts zurück (beides Teil der 52c!)
+;; Der Stack muss also bereits auf die Rücksprungaddresse zeigen.
+;; Die SpriteScroll darf A und X verändern
+;; Carry ist bei Eintritt immer gesetzt, bei Ausgang undefiniert
+
+;; Benutzte Sprites:
+;;  AA          01
+;;  AA  BB  ->  67  45
+;;      BB          23  -> somit ist immer das 2x2-Sprite mit der höheren Y-Koordinate vorne
+
+
+!macro SpriteScrollReturn .pNextSpriteScrollCode{
+    lda #<.pNextSpriteScrollCode    ; 2
+    sta zpDoSprites                 ; 3
+    rts                             ; 6 _11
+}
+
+.cBlankSprite = 32*4
+
+.pPaddingStart:
+!align 255, 0
+!if ((* - .pPaddingStart) != 0){
+!warn "SpriteScroll Padding needed: ", (* - .pPaddingStart)
+}
+
+;; nimm an #55/56 ist DMA Sprite0, #63/64 ist DMA Sprite4, @64/65(=12/13) ist DMA BL
+.SpriteScrollFunctions1Start:
+.SpriteScroll_1Y:
+    jmp .SpriteScroll_1Y_Impl           ; _3b
+.SpriteScroll_1D:
+    jmp .SpriteScroll_1D_Impl           ; _3b
+.SpriteScroll_1C:
+    jmp .SpriteScroll_1C1_Impl          ; _3b
+
+; Setze Zeile1-X : 01 23, 01 ist Zeile1A, 23 ist Zeile2B
+.SpriteScroll_1X:                     ; _5  @37(36)     BL:46
+    lda pSpriteX,x                      ; 4
+    sta vic_xs0                         ; 4     @45     @54
+    adc #23                             ; 2
+    sta vic_xs1                         ; 4 _14 @51     @60
+    lda pSpriteMsbX,x                   ; 4
+    sta vic_msb_xs                      ; 4     @59
+    lax vic_xs5                         ; 4
+    sta vic_xs3                         ; 4     @67
+    sbx #24                             ; 2
+    stx vic_xs2                         ; 4 _22
++SpriteScrollReturn .SpriteScroll_2Y    ; _11 -> 52 __34b
+
+;; Sprite Charscroller MAX (4 Sprites each line, precalculated X): max. 52c
+.SpriteScroll_1Y_Impl:                ; _8  @40(39)     BL:49
+    lda vic_ys4                         ; 4
+    adc #20                             ; 2 ; carry was set, now clear
+    sta vic_ys0                         ; 4     @50     @59
+    sta vic_ys1                         ; 4
+    sta vic_ys2                         ; 4     @58     @67
+    sta vic_ys3                         ; 4 _22 @62
+
+    inx                                 ; 2
+    stx zvSpriteRow                     ; 3     @67
+    lda pSpriteCommand,x                ; 4
+    nop : nop                           ; NOP_4
+    sta zpDoSprites                     ; 3
+    rts                                 ; 6  _22  ->52
+
+.SpriteScroll_2Y_Impl:                ; _8  @40(39)     BL:49
+    lda vic_ys0                         ; 4
+    adc #20                             ; 2 ; carry was set, now clear
+    sta vic_ys4                         ; 4     @50     @59
+    sta vic_ys5                         ; 4
+    sta vic_ys6                         ; 4     @58     @67
+    sta vic_ys7                         ; 4 _22 @62
+
+    inx                                 ; 2
+    stx zvSpriteRow                     ; 3     @67
+    lda pSpriteCommand,x                ; 4
+    eor #$80                            ; 2
+    nop                                 ; 2
+    sta zpDoSprites                     ; 3
+    rts                                 ; 6 _22  ->52
+
+; Setze Zeile1-D : 01 23, 01 ist Zeile1A, 23 ist Zeile2B
+.SpriteScroll_1D_Impl:                ; _8  @40(39)     BL:49
+    lda pSpriteData,x                   ; 4
+    ldx .pSpritePtr0+5                  ; 4
+    sta .pSpritePtr0+0                  ; 4     @52     @61
+    inx                                 ; 2
+    adc #0                              ; 2
+    stx .pSpritePtr0+2                  ; 4     @60     @71
+    inx                                 ; 2
+    sta .pSpritePtr0+1                  ; 4     @66
+    stx .pSpritePtr0+3                  ; 4
+    lda zvNOP                           ; 3 _33
++SpriteScrollReturn .SpriteScroll_1X    ; _11 -> 52
+
+!if ((.SpriteScrollFunctions1Start + 128 - *) != 0){
+!warn "SpriteScroll Padding needed 2: ", (.SpriteScrollFunctions1Start + 128 - *)
+!if (.SpriteScrollFunctions1Start + 128 < *){
+    !error("SpriteScrollFunctions max. 128b")
+}}
+
+* = .SpriteScrollFunctions1Start + 128
+.SpriteScrollFunctions2Start:
+
+.SpriteScroll_2Y:
+    jmp .SpriteScroll_2Y_Impl           ; _3b
+.SpriteScroll_2D:
+    jmp .SpriteScroll_2D_Impl           ; _3b
+.SpriteScroll_2C:
+    jmp .SpriteScroll_2C1_Impl          ; _3b
+
+
+; Setze Zeile2-X : 67 45,  67 ist Zeile2A, 45 ist Zeile1B
+.SpriteScroll_2X:                     ; _5  @37(36)     BL:46
+    lda pSpriteX,x                      ; 4
+    sta vic_xs4                         ; 4     @45     @54
+    adc #23                             ; 2
+    sta vic_xs5                         ; 4 _14 @51     @60
+    lda pSpriteMsbX,x                   ; 4
+    sta vic_msb_xs                      ; 4     @59
+    lax vic_xs1                         ; 4
+    sta vic_xs7                         ; 4     @67
+    sbx #24                             ; 2
+    stx vic_xs6                         ; 4 _22
++SpriteScrollReturn .SpriteScroll_1Y    ; _11 -> 52 __34b
+
+; Setze Zeile2-D : 67 45,  67 ist Zeile2A, 45 ist Zeile1B
+.SpriteScroll_2D_Impl:                ; _8  @40(39)     BL:49
+    lda pSpriteData,x                   ; 4
+    ldx .pSpritePtr0+1                  ; 4             @57
+    sta .pSpritePtr0+4                  ; 4     @52     @61
+    inx                                 ; 2
+    adc #0                              ; 2
+    stx .pSpritePtr0+6                  ; 4     @60     @71
+    inx                                 ; 2
+    sta .pSpritePtr0+5                  ; 4     @66
+    stx .pSpritePtr0+7                  ; 4
+    lda zvNOP                           ; 3 _33
++SpriteScrollReturn .SpriteScroll_2X    ; _11 -> 52
+
+;; .cBlankSprite = .SpriteScroll_2Y = $80
+; Setze Zeile2-D : 67 45,  67 ist Zeile2A, 45 ist Zeile1B
+.SpriteScroll_2C1_Impl:              ; _8  @40(39)     BL:49
+    lda #.cBlankSprite                  ; 2
+    sta .pSpritePtr0+6                  ; 4     @46     @55
+    sta .pSpritePtr0+7                  ; 4     @50     @59
+    lda #<.SpriteScroll_2X              ; 2
+    jmp .SpriteScroll_C1_Impl           ; 3
+
+.SpriteScroll_1C1_Impl:              ; _8  @40(39)     BL:49
+    lda #.cBlankSprite                  ; 2
+    sta .pSpritePtr0+2                  ; 4     @46     @55
+    sta .pSpritePtr0+3                  ; 4     @50     @59
+    lda #<.SpriteScroll_1X              ; 2
+    jmp .SpriteScroll_C1_Impl           ; 3
+.SpriteScroll_C1_Impl:
+    sta zpDoSprites                     ; 3     @58     @67
+    lda pSpriteColor,x             ; 4
+.SpriteScroll_InitFrameColor:
+    sta vic_sc01                        ; 4     @66
+    lsr : lsr : lsr : lsr               ; 8
+    sta vic_sc11                        ; 4
+    rts                                 ; 6 _52
+
+SpriteScroll_Init:
+    lda #opcode_JMP_16
+    sta doSpritesJmp
+
+    lda #1 ; vic_white
+    ldx #7
+-   sta vic_cs0,x
+    dex
+    bpl -
+
+    lda #0
+    sta vic_sc11
+    sta vic_sback
+    sta vic_msb_xs
+    sta zvSpriteRowStart
+
+    ldx #12
+    jsr SpriteText_DoSpaces
+
+    lda #$FF
+    sta vic_smc
+    sta vic_sactive
+    lda #15
+    sta zvSpriteY
+    lda #>.SpriteScrollFunctions1Start
+    sta zpDoSprites+1
+    rts
+
+!if (FEAT_PULSESPRITECOLOR = 1){
+.pFlashColors:
+    !byte $00,$01,$02,$03,$04,$05,$06,$07,$08,$09,$0A,$0B,$0C,$0D,$0E,$0F
+    !byte $00,$01,$B8,$03,$04,$05,$06,$07,$08,$09,$0A,$0B,$0C,$0D,$0E,$0F
+    !byte $00,$01,$C5,$03,$04,$05,$06,$07,$08,$09,$0A,$0B,$0C,$0D,$0E,$0F
+    !byte $00,$01,$FD,$03,$04,$05,$06,$07,$08,$09,$0A,$0B,$0C,$0D,$0E,$0F
+    !byte $11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11,$11
+}
+
+SpriteScroll_Animate:
+SpriteScroll_AnimateY:
+    lax zvSpriteY
+.vSpriteScrollY_Speed = *+1
+    sbx #3
+    bcs +
+    txa
+    sbx #256-20
+    lda vSpriteScroll_FirstXPos
+    sec
+    sbc .vSpriteScroll_XStep1
+    sta vSpriteScroll_FirstXPos
+    inc zvSpriteRowStart
+!if (FEAT_PULSESPRITECOLOR = 0){
+    ldy zvSpriteRowStart
+    iny : iny
+    lda pSpriteCommand,y
+    cmp #<.SpriteScroll_1C
+    bne +
+    lda pSpriteColor,y
+    sta .vSpriteScroll_StartColor
+}
++   stx zvSpriteY
+
+!if (FEAT_PULSESPRITECOLOR = 1){
+SpriteScroll_AnimateColor:
+.cFlashStep = .cMaxFlashColors
+.cMaxFlashIntensity = 4*.cFlashStep
+    lax .zvFlashIntensity
+.vFlashDir = *+1
+    sbx #0
+    stx .zvFlashIntensity
+    beq +
+    cpx #.cMaxFlashIntensity
+    ldx #.cFlashStep
+    bcs ++
++   ldy .zvFlashTriggerVoiceCmd
+    cpy #.cFlashTriggerVoiceCmdValue
+    bne ++
+    ldx #-.cFlashStep
+++  stx .vFlashDir      ;_25b
+
+    ; explicit gradient for each color (5b per color), probably compressible by 20-30%
+    lax zvSpriteRowStart
+    sbx #-12
+    stx .zvTmpLast
+    tax
+    sbx #-2
+    stx .zvTmpFirst
+-   ldy pSpriteCommand,x
+    cpy #<.SpriteScroll_1C
+    bne ++                          ;_18b
+    lda pSpriteColor,x
+    cmp #.cFirstFlashColor
+    bcc ._WriteA
+    adc .zvFlashIntensity
+    tay
+    lda .pFlashColors-.cFirstFlashColor-1,y
+._WriteA
+    sta pSpriteColor_Comp,x
+    cpx .zvTmpFirst
+    bne ++
+    sta .vSpriteScroll_StartColor ;_23
+++  inx
+    cpx .zvTmpLast
+    bcc -                           ; 46b (+ 40b pFlashColors for 8 flash color entries) = 86b __111b
+}
+
+SpriteScroll_AnimateX:
+    lax vSpriteScroll_FirstXPos
+.vSpriteScrollX_Speed = *+1
+    sbx #256-2
+    stx vSpriteScroll_FirstXPos
+
+    ldy zvSpriteRowStart
+    tya
+    clc
+    adc #12
+    sta .vSpriteScrollX_LastRow
+vSpriteScroll_FirstXPos = *+1
+    ldx #20
+
+.SpriteScroll_AnimateX_Row2:
+    lda pSpriteXTabLo,x
+    sta pSpriteX,y
+    lda pSpriteXTabMsb,x
+    and #%00110000
+    ora .zvTmpSpriteMsb
+    sta pSpriteMsbX,y
+    and #%11110000
+    sta .zvTmpSpriteMsb
+    lda pSpriteXTabMsb,x
+    and #%00001100
+    ora .zvTmpSpriteMsb
+    sta .zvTmpSpriteMsb
+
+    txa
+.vSpriteScroll_XStep1 = *+1
+    sbx #15
+    iny
+
+.SpriteScroll_AnimateX_Row1:
+    lda pSpriteXTabLo,x
+    sta pSpriteX,y
+    lda pSpriteXTabMsb,x
+    and #%00000011
+    ora .zvTmpSpriteMsb
+    sta pSpriteMsbX,y
+    and #%00001111
+    sta .zvTmpSpriteMsb
+    lda pSpriteXTabMsb,x
+    and #%11000000
+    ora .zvTmpSpriteMsb
+    sta .zvTmpSpriteMsb
+
+    txa
+.vSpriteScroll_XStep2 = *+1
+    sbx #15
+    iny
+.vSpriteScrollX_LastRow = *+1
+    cpy #0
+    bne .SpriteScroll_AnimateX_Row2
+    cpy .vSpriteText_DstPtr
+    bne +
+    jsr SpriteText_ParseNextCmd
++
+SpriteScroll_PrepareFrame:
+.vSpriteScroll_StartColor = *+1
+    lda #5
+    jsr .SpriteScroll_InitFrameColor
+
+    ldx #4
+    lda #23
+-   dex
+    sec
+    sbc #7
+    cmp zvSpriteY
+    bpl -
+    clc
+
+    lda .pSpriteCommandEnterLo,x    ; 4
+    sta zpDoSprites                 ; 3
+    lda zvSpriteRowStart            ; 3
+    adc .pSpriteCommandStartRow,x   ; 4
+    sta zvSpriteRow                 ; 3
+
+    lda #(45-20)
+    clc
+    adc zvSpriteY ; MUSS 0-20 sein!
+    sta vic_ys0
+    sta vic_ys1
+    sta vic_ys2
+    sta vic_ys3         ;16
+    adc #21             ; 5
+    sta vic_ys4
+    sta vic_ys5
+    sta vic_ys6
+    sta vic_ys7                         ;16 _40
+
+    ; vorherige Info für zweite Reihe Sprite B1
+    ldx zvSpriteRowStart
+    lda pSpriteData,x                   ; 4
+    adc #2
+    sta .pSpritePtr0+2
+    adc #1
+    sta .pSpritePtr0+3
+    lda pSpriteX,x                      ; 4
+    sta vic_xs2                         ; 4
+    adc #24                             ; 2
+    sta vic_xs3                         ; 4
+
+    clc
+    inx
+
+    ; Sprite A erste und zweite Reihe
+    lda pSpriteX,x                      ; 4
+    sta vic_xs0                         ; 4
+    sta vic_xs6                         ; 4
+    adc #24                             ; 2
+    sta vic_xs1                         ; 4
+    sta vic_xs7                         ; 4
+    lda pSpriteData,x                   ; 4
+    tay
+    sty .pSpritePtr0+0
+    iny
+    sty .pSpritePtr0+1
+    iny
+    sty .pSpritePtr0+6
+    iny
+    sty .pSpritePtr0+7
+
+    ; Sprite B2 erste Reihe
+    inx
+    clc
+    lda pSpriteData,x                   ; 4
+    sta .pSpritePtr0+4
+    adc #1
+    sta .pSpritePtr0+5
+
+    lda pSpriteX,x                      ; 4
+    sta vic_xs4                         ; 4
+    adc #24                             ; 2
+    sta vic_xs5                         ; 4
+
+    lda pSpriteMsbX,x                   ; 4
+    sta vic_msb_xs                      ; 4
+
+    rts
+
+.pSpriteCommandEnterLo:
+    !byte <.SpriteScroll_1Y, <.SpriteScroll_2X, <.SpriteScroll_2D, <.SpriteScroll_2Y
+.pSpriteCommandStartRow:
+    !byte 2,2,2,1
+
+cSpriteScroll_EOT = $40
+cSpriteText_SpaceCmd = $40  ; values: $41-$6F
+cSpriteText_SpaceMask = $3F
+cSpriteText_ColorCmd = $70
+cSpriteText_ColorMask = $0F
+
+cSpriteText_YSpeedCmd = $D0
+cSpriteText_YSpeedMask = $0F
+cSpriteText_PauseCmd = $E0
+cSpriteText_PauseMask = $0F
+
+.SpriteText_ScrollCommand:
+    cmp #cSpriteText_YSpeedCmd
+    bcc .SpriteText_Read
+    and #cSpriteText_YSpeedMask
+    sta .vSpriteScrollY_Speed
+    jmp .SpriteText_Read
+
+SpriteText_ParseNextCmd:
+.vSpriteText_DstPtr = *+1
+    ldx #12 ; current last blit index
+.vSpriteText_SrcPtr = *+1
+    ldy #$FF ; current text offset
+.SpriteText_Read:
+    iny
+    lda DATA_SpriteText,y
+    bmi .SpriteText_ScrollCommand
+    cmp #cSpriteScroll_EOT
+    bne +
+    ldy #(DATA_SpriteText_Loop-DATA_SpriteText-1)
+    bpl .SpriteText_Read
++   sty .vSpriteText_SrcPtr
+    cmp #cSpriteText_ColorCmd
+    bcs .SpriteText_ColorCmd
+    cmp #cSpriteText_SpaceCmd
+    bcs .SpriteText_SpaceCmd
+    asl : asl
+.SpriteText_WriteChar:
++   sta pSpriteData,x
+    lda #<.SpriteScroll_1D
+.SpriteText_WriteCmd:
+    sta pSpriteCommand,x
+    inx
+    stx .vSpriteText_DstPtr
+    rts
+
+.SpriteText_ColorCmd:
+    and #cSpriteText_ColorMask
+    sta .zvTmpColor
+    lda #3
+    jsr SpriteText_DoSpaces
+-   dex
+    lda .zvTmpColor
+    sta pSpriteColor,x
+    lda #<.SpriteScroll_1C
+    sta pSpriteCommand,x
+    rts
+
+.SpriteText_SpaceCmd:
+    and #cSpriteText_SpaceMask
+SpriteText_DoSpaces:
+    sta .zvTmpSpaces
+-   lda #<cSpriteScroll_Space
+    jsr .SpriteText_WriteChar
+    dec .zvTmpSpaces
+    bne -
+    rts
+
+!warn "SpriteScroll Start: ", .DEBUG_SPRITESCROLL_START, " End: ", *, "  Size: ", * - .DEBUG_SPRITESCROLL_START
+
+
+
+
+
+
+
+
+
+

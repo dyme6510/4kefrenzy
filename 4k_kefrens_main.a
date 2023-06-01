@@ -1,0 +1,381 @@
+!src <6502/opcodes.a>
+!src <6502/std.a>
+!src <cbm/c64/cia1.a>
+!src <cbm/c64/cia2.a>
+!src <cbm/c64/vic.a>
+!cpu 6510
+
+RUN_WITHOUT_EXOMIZER = 0
+
+!if (RUN_WITHOUT_EXOMIZER = 1){
+*= $801
+    !word (+), 2022
+    !text $9e, "2061", 0
++   !word 0
+    jmp StartAddr:
+}
+
+SCROLLX_MAXSPEED = 8
+
+DEBUG_TIMING_BORDER = 0
+!macro DebugBorderInc {
+!if (DEBUG_TIMING_BORDER = 1){
+    inc vic_cborder
+}}
+!macro DebugBorderOff {
+!if (DEBUG_TIMING_BORDER = 1){
+    lda #0
+    sta vic_cborder
+}}
+
+
+* = $184A
+StartAddr:
+
+!src "4k_kefrens_constants.a"
+
+SetupDisableIrqs:
+    sei
+    lda #$35
+    sta $01         ; Turn off basic+kernal ROM
+
+    ; vic and cia2 interrupts should be off and acknowledged... we started from plain basic
+
+.stableCIA_Loop:
+    ; prepare stable raster CIA A1-Clock
+    lda vic_line            ; 4
+
+	ldy #<Irq_StartColumns
+	sty cpu_nmi
+	ldy #>Irq_StartColumns
+	sty cpu_nmi+1
+
+     ; Timer Latch immer auf 14 Zeilen (L45 -> L60)
+    ldy #14                         ; 2 // L45:14 L46:13 ... L59:0 L60:IRQ
+    sty cia2_tb_lo
+
+    ldy #$7f
+    sty cia1_icr    ; Turn off CIA 1 interrupts
+    ldy cia1_icr    ; ACK CIA 1 interrupts
+
+    ldy #$00
+    sty cia2_cra    ; Clear CIA1-A-Timer
+    sty cia2_crb    ; Clear CIA1-B-Timer
+    sty cia2_ta_hi
+    sty cia2_tb_hi
+    ldy #62
+    sty cia2_ta_lo                             ;_28
+
+    nop : nop              ; NOP_4
+    and #$FE               ; 2 only compare even rows to exclude last 64c-line
+    cmp vic_line           ; 4:                ;_6 -> __62
+
+    bne .stableCIA_Loop    ; 3:  __69
+
+!if (>* != >.stableCIA_Loop){
+    !error ">* != >.stableCIA_Loop ", *, " - ", .stableCIA_Loop
+}
+
+    ;; exits on a new rasterline + 2.
+    ;; This may very well be a bad line, so get the CIA rolling before BL takes over
+    ;; I need the CIA to trigger BETWEEN sprites and the BL, so at @12
+    cli
+    lda #%00010001
+    sta cia2_cra            ; 4  Start Timer at VIC_LINE + 11
+
+    jsr NanoPlayer_Init
+    jsr SetupIntroTransition
+
+    ldx #((cZeroPage_PersistentEnd-1)-cZeroPage_PersistentInitialized)
+-   lda DATA_Zeropage,x
+    sta cZeroPage_PersistentInitialized,x
+    dex
+    bpl -
+
+    ldx #26
+-   lda #0
+    sta zpBarXPos,x
+    dex
+    bpl -
+
+cZPC_FrontChars = cScrollerChar1
+cZPC_ColorBarChars = $0B
+cZPC_ColorFrontChars = cScrollLeft_CMD_Color + $04
+
+    jsr GenerateSineTables
+    jsr GenerateBarCode
+    jsr InitBigScroller
+    jsr BuildSpriteFont
+    jsr InitTextScreen
+    jsr SpriteScroll_Init
+
+-   lda vic_controlv
+    bne -
+    sta vic_cbg
+    lda #$01
+    sta vic_cbg2
+    lda #$0B
+    sta vic_cbg1
+
+    jsr InitNextFrame
+
+-   lda vic_line
+    cmp #20
+    bne -
+    lda vic_controlv
+    bne -
+
+    ; Set video mode
+    ;; select vic-page 1
+    lda $DD00
+    and #($FF - cVicBankIndex)
+    sta $DD00
+
+    ;pBarCharsetBase = $7800
+    ;pTextScreenBase = $7C00
+    lda #((>pTextScreenBase << 2) & $F0) | ((>pBarCharsetBase >> 2) & $0E)
+    sta vic_ram
+
+    lda #cControlHFlags
+    sta vic_controlh
+
+    lda #%10000010
+    sta cia2_icr                    ; Enable CIA2 timer B interrupts
+
+    lda #45
+	ldx #<Irq_VicStartScreen
+	ldy #>Irq_VicStartScreen
+	stx cpu_irq
+	sty cpu_irq+1
+    sta vic_line
+.EmptyLoop:
+    jmp .EmptyLoop ; ONLY 3 CYCLES for stable irq
+
+
+!src "4k_kefrens_spritescroll.a"
+!src "4k_kefrens_spritefont.a"
+!src "4k_kefrens_columns_code_generator.a"
+!src "4k_kefrens_bigfont.a"
+!src "4k_kefrens_generate_data.a"
+!src "4k_kefrens_intro.a"
+
+!zone CopperColumnsMain
+
+cControlVFlags = %00010000; DEN-Bit gesetzt (Display ENable)
+cControlHFlags = %11010000; Multicolor-Bit gesetzt
+
+; Sprite-DMA findet auch im Rahmen statt
+; Sprite0-3 müssen spätestens ab Zeile 46 Sichtbar sein (Y-Koordinate 45),
+; damit hier immer konstantes Timing ist (52c per line, 9c for BL)
+.cStartCopperIndex = 26
+.cTopOfFirstColumn = 66 ; In Zeile 66 beginnt die erste Column
+.cFirstVisibleLineOffset = 15 ; instead of just 7, 15 Lines will be invisible due to linecrunch
+Irq_VicStartScreen ; enters at newline + @7-10 at line #45, so before Display enabled and before sprites
+    ;; A,X,Y are irrelevant, outside of the interrupt is just an empty loop
+    ;; with max opcode duration of 3 cycles
+
+    lda zvScrollX               ; 3
+    asr #12                     ; 2
+    ora #cControlHFlags         ; 2
+    sta vic_controlh            ; 4
+    asr #6                      ; 2
+    eor #3                      ; 2
+    sta zvBar_ScrollX           ; 3 _18        
+    
+    lda #%01011001              ; 2 restart b with latch; counts underflows of timer a, stop at underflow
+    sta cia2_crb                ; 4 __24    @L45+[31-34]
+    
+cControlVFlags_INVALIDMODE = %01010000; zum Verstecken der weggecrunchten Zeilen
+    lda zvScrollY                   ; 3
+    anc #7                          ; 2
+    ora #cControlVFlags             ; 2
+    sta zvVicControlV               ; 3
+    ora #cControlVFlags_INVALIDMODE ; 2
+    tay                             ; 2
+    sbc #0 ; carry is clear         ; 2
+    and #7                          ; 2
+    ora #cControlVFlags             ; 2
+    sta zvVicControlVForcedBL       ; 3     _23 @L45+[54-57]
+
+    ldx zvSpriteRow     ; 3
+    jsr doSpritesJmp    ; 56                    @L47+[8-12] ; doSpriteJmp may have 1 hidden cycle
+
+    sec                 ; 2
+    lda #58             ; 2
+    sbc cia2_ta_lo      ; 4     read @L47+[16-20] -> contains 63-(3-7): 53-57, carry stays set
+    sta *+4             ; 4
+    bcs *+2             ; 3
+    lda #opcode_LDA_IMM
+    lda #opcode_LDA_IMM
+    lda opcode_NOP          ; min. 2 -> _17 : exits @L47+31 GEMESSEN
+
+    nop
+    lda zvScrollY                   ; 3
+    sbc #56                         ; 2
+    bcc .ScrollY_Crunch             ; 2/3   -> L47+41
+    bcs .ScrollY_End                ; 3     -> L47+43
+    ;; FLD-DELAY?
+
+    ; ENTER @L47+41
+.ScrollY_Crunch:
+    ldx #cControlVFlags_INVALIDMODE ; 2
+    stx vic_controlv                ; 4  @L47+47
+    nop : nop : nop : nop           ; NOP_8 _@55 = 3
+.ScrollY_Loop:
+    adc #7                          ; 2/2
+    bcs .ScrollY_Last               ; 2/3 @7 -> @8
+.ScrollY_Last_BR0:
+    
+    inc vic_controlv                ; 6 @Lx+13 ; schnell BL wegnehmen, Vic Data Pointer ist schon erhöht
+    bcc +                           ; 3
+.ScrollY_Last:
+    sty vic_controlv                ; -/4 -> @12
++   ldx #7
+-   dex
+    bne -                           ; 36
++   bcc .ScrollY_Loop               ;_52
+.ScrollY_Loop_BR0:
+    nop : nop                       ; NOP_4
+.ScrollY_End:
+    lda zvVicControlV               ; 3
+    sta vic_controlv                ; 4 -> spätestens L56@4
+                                    ;      bis 60 kann aber noch eine BL kommen,
+                                    ;      -> rechne mit L56@47
+                                    
+    lda zvScrollY                   ; 3
+    ldx #7                          ; 2
+    sbx #0                          ; 2
+    lsr : lsr : lsr                 ; 6
+    cpx #7                          ; 2
+    adc #0                          ; 2
+    sta zvLineRepeatDelay           ; 3  -> max. L57@11
+    
+    asl vic_irq                     ; 6 ; IRQ-Bit was set -> sets carry
+
+    ; lda cia2_icr                    ; 4 ACK CIA
+
+    ; Erster Column-Sprite-Aufruf ca. Line66, also 2x hier und 1x L59
+    ; spätestens 57@41
+    sec                 ; 2
+    ldx zvSpriteRow     ; 3
+    jsr doSpritesJmp    ; 56
+    sec                 ; 2
+    ldx zvSpriteRow     ; 3
+    jsr doSpritesJmp    ; 56 _2L+18          -> max. L59@29
+    rti                 ; 6 _71    spätestens L59@34
+
+!warn "Irq_VicStartScreen: ", Irq_VicStartScreen
+!if (>.ScrollY_Last_BR0 != >.ScrollY_Last){
+    !error "BRANCH CROSSES PAGE BOUNDS (ScrollY_Last_BR0): ", .ScrollY_Last_BR0, " -> ", .ScrollY_Last
+}
+!if (>.ScrollY_Loop_BR0 != >.ScrollY_Loop){
+    !error "BRANCH CROSSES PAGE BOUNDS (ScrollY_Loop_BR0): ", .ScrollY_Loop_BR0, " -> ", .ScrollY_Loop
+}
+
+
+InitNextFrame:
+
+.AnimateBars:
+    +DebugBorderInc
+
+    lda #0
+    jsr DoResetBarChars
+
+    lda #$ff
+    ldx zvBars_StartIndex    
+.pDoAnimateBarsStart = *+1    
+    jsr DoAnimateBarsImpl + ((cCountCopperBars)*cAnimateBarsImplSingleBarSize)
+
+.vUnanimatedBarsToGo = *+1
+    lda zvAnimationFrameCounter
+    and #3
+    bne ++
+    lax .pDoAnimateBarsStart
+    cmp #<DoAnimateBarsImpl
+    beq ++
+    sbx #cAnimateBarsImplSingleBarSize
+    stx .pDoAnimateBarsStart
+    bcs +
+    dec .pDoAnimateBarsStart+1
++   inc zvBars_StartIndex
+    inc zvBars_StartIndex
+    inc zvBars_StartIndex    
+++  inc zvBars_StartIndex
+    
+.AnimateSprites:
+    +DebugBorderInc
+    jsr SpriteScroll_Animate
+
+.AnimateBigScroller:
+    +DebugBorderInc
+    
+.vScrollYSinPos = *+1
+    ldx #0
+    inc .vScrollYSinPos
+    lda pScrollerYTab,x
+    sta zvScrollY    
+
+;.vScrollerY = *+1
+;    lda #$0
+;    clc
+;.vScrollerDY = *+1
+;    adc #16
+;    bpl +
+;    lda #16
+;    sta .vScrollerDY
+;    lda #$0
+;+   sta .vScrollerY
+;    eor #$7E
+;    lsr
+;    sta zvScrollY
+;    dec .vScrollerDY
+    
+.AnimateScrollX:
+    ldx zvScrollX_Speed
+    bne +
+    dec zvScrollX_Delay0
+    bne .AnimateScrollXDone
+    ldx zvScrollX_SpeedResume
+    stx zvScrollX_SpeedDst
+
++   ldx zvScrollX_Speed
+    cpx zvScrollX_SpeedDst
+    beq ++
+    bcs +
+    inc zvScrollX_Speed
+    bne ++
++   dec zvScrollX_Speed
+++
+
+    lda zvScrollX
+    sec
+!if (SCROLLX_MAXSPEED > 8){
+    sbc zvScrollX_Speed
+    sta zvScrollX
+    bpl +
+-   jsr ScrollLeft
+    lax zvScrollX
+    sbx #-16
+    stx zvScrollX
+    bmi -                       ;_16
++    
+}
+!if (SCROLLX_MAXSPEED <= 8){
+    ldx #15
+    sbc zvScrollX_Speed
+    sax zvScrollX
+    bpl +
+    jsr ScrollLeft
+    lda zvScrollX               ;_13
++    
+}
+
+.AnimateScrollXDone:
+    jsr NanoPlayer_Loop
+
+    +DebugBorderOff
+
+    rts
+
+!src "4k_kefrens_data.a"
+!src "nanoplayer_main.a"

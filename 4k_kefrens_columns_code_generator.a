@@ -1,0 +1,820 @@
+
+; SPRITES ist IMMER zwischen Line1 und Line2
+; DELAY verändert KEINE Register (auch A nicht, carry wird aber möglicherweise gesetzt)
+; -> nur zwischen Line1 und Line2 gehen A und (Y/X) verloren, (Y/X) kann ab Line2 frei verwendet werden
+;
+; Es gibt nur ENTWEDER Line1: -1@31 ODER Line2: 0@31
+; Gemalt wird bis Zeile 25*7+66+3 = 244, dann muss abgebrochen werden oder die letzen 2 Zeilen noch hintendran gehängt werden
+
+; Generiert 3478b Code
+!zone GenerateBarCode
+
+; IN CONSTANTS
+.cOutCharsHi = >pBarCharBase; 336 bytes benötigt (42 Spalten, davon 39 immer wieder löschen)
+.pOutCode = pBarCodeStart; 3378b
+.cBarRtsStackStart = cBarSpriteRtsStackBase ; 4*8b
+.cBarRtsStackSize = 4*8
+
+.cGeneratedCodeSize_ResetBarChars = 937
+.cGeneratedCodeSize_BlitBars = 3244;
+DoResetBarChars = pBarCodeStart + .cGeneratedCodeSize_BlitBars
+.cResetBarCharsSize = 3*312 + 1
+DoAnimateBarsImpl = DoResetBarChars + .cResetBarCharsSize
+cAnimateBarsImplSingleBarSize = 7
+cCountCopperBars = 26
+.cAnimateBarsImplSize = cAnimateBarsImplSingleBarSize*cCountCopperBars + 1
+
+; Tmp Variables during Bar Blitting:
+.zpC = cZeroPage_ColumnsStart
+.zvBar_BlitR = .zpC+0
+.zvBar_RestoreA = .zpC+1
+.zvBar_RestoreX = .zpC+2
+.zvCurrentColumn = .zpC+3
+zvBar_ScrollX = .zpC+4
+
+zvLineRepeatDelay = .zpC+11
+zvLineRepeatMask = .zpC+12
+!if (cZeroPage_ColumnsEnd != .zpC+13){
+    !error "MEMORY STACK INCORRECT"
+}
+
+; Tmp Variables during Code Creation:
+.cTmpZP = cZeroPage_TemporaryStart
+.zvCurrentBarStart = .cTmpZP + 0
+.zpOpIn = .cTmpZP + 1;2
+.zpMark = .cTmpZP + 3;4
+.zvCodeIndex = .cTmpZP + 5
+.zvTmpArg = .cTmpZP + 6
+
+.zpOut = zpCG_Out
+.zpIn2 = zpCG_In2
+.zvSwitchBranchOpcode = zpCG_SwitchOp
+.zvSpecialByte0 = .zvSwitchBranchOpcode
+.zvRtsStackPosition = zpCG_RtsPos
+cZPC_CG_OutLo = <.pOutCode
+cZPC_CG_OutHi = >.pOutCode
+cZPC_CG_In2Lo = <.pIn2Data
+cZPC_CG_In2Hi = >.pIn2Data
+cZPC_CG_SwitchOp = opcode_BCC
+cZPC_CG_RtsPos = .cBarRtsStackStart-1
+
+.pFirstVisibleCharBase = pBarCharsetBase + (cFirstVisibleBarChar * 8)
+
+.DEBUG_BARCODE_START = *
+
+GenerateBarCode:
+    
+GenerateBarBlitCode:
+    ldx #.cBarRtsStackSize-1
+-   lda .pBarRtsStackData,x
+    sta $0100+.cBarRtsStackStart,x
+    dex
+    bpl -    
+    
+.ParseCodeBlock1:
+    lda #<.pBar2MarkSrc_L
+    sta .zpMark
+    lda #>.pBar2MarkSrc_L
+    sta .zpMark+1    
+.ParseCodeAgain:
+    ldx #8              ; Bar2 kommt 2x
+    stx .zvCurrentBarStart
+    lda #0
+    sta .zvCodeIndex
+.ParseNextCode:
+    ldx .zvCodeIndex
+    lda .pCODE_BARS,x
+    lsr : lsr : lsr : lsr
+    jsr .ParseCodeA
+    ldx .zvCurrentBarStart
+    bmi ++
+    ldx .zvCodeIndex
+    lda .pCODE_BARS,x
+    and #$0F
+    jsr .ParseCodeA
+    inc .zvCodeIndex
+    ldx .zvCurrentBarStart
+    bpl .ParseNextCode
+++  lda #.cOutCharsHi+1
+    cmp .vCmd_OutCharsHi
+    beq +
+.ParseCodeBlock2:    
+    sta .vCmd_OutCharsHi
+    lda #<.pBar2MarkSrc_R
+    sta .zpMark
+    lda #>.pBar2MarkSrc_R
+    sta .zpMark+1
+    dec .zvRtsStackPosition ; Einmal zuviel cCODE_NEXTBAR
+    dec .zvRtsStackPosition    
+    lda #opcode_BCS
+    sta .zvSwitchBranchOpcode    
+    jmp .ParseCodeAgain
++
+    
+GenerateResetChars:
+    ldx #.cCODE_ResetScreen
+    jsr .GenerateCodeKeyX
+    rts
+    
+    
+; CODEGENERATOR
+; 00000000: EXIT
+; 0_COPY #bytes
+; 1_OPCODE  STA/LDA -0- [Column:LMR  Line0-7]
+.ParseCodeA:
+    cmp #.cCODE_NEXTBAR
+    bne +
+    dec .zvCurrentBarStart
+    inc .zvRtsStackPosition
+    inc .zvRtsStackPosition
+    rts
++   tax
+.GenerateCodeKeyX:
+    lda .pCodeKeysLo,x
+    sta .zpOpIn
+    lda .pCodeKeysHi,x
+    sta .zpOpIn+1
+.ExpandCmd:
+    ldy #0
+    lax (.zpOpIn),y
+    beq .ExpandCmd_EXIT    
+    ; X mit anzahl füllen
+    ldx #%00011111
+    sbx #0
+    asl
+    bcs .ExpandCmd_OPCODE
+.ExpandCmd_COPY_ANY:
+    asl
+    bcs .ExpandCmd_COPY2    
+.ExpandCmd_COPY_IN1:
+    inc .zpOpIn
+    bne +
+    inc .zpOpIn+1
++    
+-   lda (.zpOpIn),y
+    sta (.zpOut),y
+    iny
+    dex
+    bne -
+    tya
+    jsr .ExpandCmd_ADDOPIN
+    bne .ExpandCommandOpcode_EndOut
+.ExpandCmd_EXIT:
+    rts
+.ExpandCmd_COPY2:
+    asl
+    bcs .ExpandCmd_COPYSPECIALBYTE
+-   lda (.zpIn2),y
+    sta (.zpOut),y
+    iny
+    dex
+    bne -
+    tya
+    adc .zpIn2
+    sta .zpIn2
+    bne .ExpandCommandOpcode_EndSingleByteOpcode ; always taken    
+.ExpandCmd_COPYSPECIALBYTE:
+-   lda .zvSpecialByte0,x
+    sta (.zpOut),y
+    iny    
+    bne .ExpandCommandOpcode_EndSingleByteOpcode    
+.ExpandCmd_OPCODE:
+    asl
+    bcc .ExpandCmd_OPCODE_CHARSET
+    asl
+    bcs .ExpandCmd_OPCODE_MARK_COMMANDS
+    jmp .ExpandCmd_OPCODE_REPEAT
+.ExpandCmd_OPCODE_MARK_COMMANDS:
+    asl
+    bcc .ExpandCmd_OPCODE_MARK_DST
+    bmi .ExpandCmd_OPCODE_MARK_REF2
+.ExpandCmd_OPCODE_MARK_SRC:
+    lda .zpOut
+    sta .zpMark
+    lda .zpOut+1
+    sta .zpMark+1
+    ldy #2              ; skip 2 bytes for addr
+    bne .ExpandCommandOpcode_EndSingleByteOpcode
+.ExpandCmd_OPCODE_MARK_REF2:    
+    lda (.zpMark),y
+    sta (.zpOut),y
+    iny
+    lda (.zpMark),y
+    sta (.zpOut),y
+    iny
+    bne .ExpandCommandOpcode_EndSingleByteOpcode
+.ExpandCmd_OPCODE_MARK_DST:
+    lda .zpOut
+    sta (.zpMark),y
+    iny                 ; skip 1 byte for dst
+    lda .zpOut+1
+    sta (.zpMark),y
+    jmp .ExpandCommandOpcode_EndSingleByteOpcode
+.ExpandCmd_OPCODE_CHARSET:
+    asl
+    lda #opcode_STA_16Y
+    bcc +
+    lda #opcode_LDA_16Y
+    clc
++   sta (.zpOut),y
+    iny
+    ; Write Addr
+    txa
+    ldx #%00011000
+    sax .vTmp_LMR
+    adc .zvCurrentBarStart
+    adc #2  ; 8 und 0 -> Bar2
+    and #7
+.vTmp_LMR = *+1
+    ora #0
+    sta (.zpOut),y
+    iny    
+    ; Write Hi
+.ExpandCommandOpcode_WriteCharsHi:
+.vCmd_OutCharsHi = *+1
+    lda #.cOutCharsHi
+    sta (.zpOut),y
+    iny
+.ExpandCommandOpcode_EndSingleByteOpcode:
+    inc .zpOpIn
+    bne +
+    inc .zpOpIn+1
+.ExpandCommandOpcode_EndOut:
++   tya
+    clc
+    adc .zpOut
+    sta .zpOut
+    bcc +
+    inc .zpOut+1
+.ExpandCommand_Continue: 
++   jmp .ExpandCmd ; always taken
+.ExpandCmd_OPCODE_REPEAT:
+    ; repeat count: 2b
+    iny
+    sec
+    lda (.zpOpIn),y
+    sbc #1
+    sta (.zpOpIn),y
+    iny
+    lda (.zpOpIn),y
+    sbc #0
+    sta (.zpOpIn),y
+    bcs +
+.ExpandCmd_CommandRepeatEnd:
+    lda #5
+    jsr .ExpandCmd_ADDOPIN
+    bne .ExpandCommand_Continue
++   iny
+
+    ;offset: opcode x-part
+    stx .zvTmpArg
+    lda .zpOpIn
+    sbc .zvTmpArg
+    sta .zpOpIn
+    bcs +
+    dec .zpOpIn+1
++   clc
+    txa
+    adc #3
+    tay ;17b
+
+    ; argument increase: 1b
+    lda (.zpOpIn),y
+    sta .vArgInc
+    iny
+    ; argument offset: 1b
+    lda (.zpOpIn),y
+    tay
+    lda (.zpOpIn),y
+.vArgInc = *+1    
+    adc #0
+    sta (.zpOpIn),y
+    iny
+    lda (.zpOpIn),y
+    adc #0
+    sta (.zpOpIn),y
++   jmp .ExpandCmd
+.ExpandCmd_ADDOPIN:
+    clc
+    adc .zpOpIn
+    sta .zpOpIn
+    bcc +
+    inc .zpOpIn+1
++   rts    
+
+.OP_IN =        %00000000
+.OP_IN2 =       %01000000
+.OP_SPEC =      %01100000
+.OP_LDA_L =     %10100000
+.OP_LDA_M =     %10101000
+.OP_LDA_R =     %10110000
+.OP_STA_L =     %10000000
+.OP_STA_M =     %10001000
+.OP_STA_R =     %10010000
+.OP_REPEAT =    %11000000
+.OP_MARK_DST =  %11100000
+.OP_MARK_SRC =  %11110000
+.OP_MARK_REF2 = %11111000
+
+    ;; Stabilität erreichen durch
+    ;; Schreibzugriffe in @54, @62 : falls zu langsam, wird 1c ausgeglichen
+    
+.pCODE_BlitLine0:               ; -3@32 or -2@32 (or @41 when waiting for BL)
+    !byte .OP_LDA_R+0               ; 4 (or 5*)
+    !byte 3 : ora pBarSrcR0,x       ; 4
+    !byte .OP_STA_R+0               ; 5     @45         @54(*)
+    !byte 3 : ora pBarSrcR1,x       ; 4
+    !byte .OP_STA_R+1               ; 5     @54(*)      @63(*) -> 1c zu langsam für sprites2, gerade richtig für BL
+    !byte 6 : and pBarSrcR2,x       ; 4                           aber jetzt vielleicht 1c zu früh, falls LDA nur 4c
+              sta+2 .zvBar_BlitR    ; 4 _30 @62(*)
+    !byte .OP_LDA_L+0               ; 4
+    !byte 3 : ora pBarSrcL0,x       ; 4
+    !byte .OP_STA_L+0               ; 5 
+    !byte 3 : ora pBarSrcL1,x       ; 4
+    !byte .OP_STA_L+1               ; 5 _52
+    !byte 0
+.cCS_BL0 = 36
+.pCODE_BlitLine1:               ; -2@32 or -1@32 (or @41 when waiting for BL)    
+    !byte 3 : and pBarSrcL2,x       ; 4
+    !byte .OP_STA_L+2               ; 5     @41         @50
+    !byte .OP_STA_L+3               ; 5 _14 @46         @55* zu früh, aber NACH BL, kann in Line2 ausgeglichen werden
+    !byte 2 : lda #$FF              ; 2
+    !byte .OP_STA_M+0               ; 5     @53         @62
+    !byte .OP_STA_M+1               ; 5 _26 @58         @67
+    !byte 3 : lda pBarSrcM2,x       ; 4
+    !byte .OP_STA_M+2               ; 5     @67
+    !byte .OP_STA_M+3               ; 5
+    !byte .OP_STA_M+4               ; 5 _45
+    !byte 1, opcode_STA_16, .OP_MARK_SRC ; 4
+    !byte 2 : ldx zvSpriteRow       ; 3 _52     Done: 3-4-4
+    !byte 0
+.cCS_BL1 = 34  
+.cCO_BL1_MARK_SRC = 30 
+.pCODE_BlitLine2:               ; 0@32 or 1@32 (or @41 when waiting for BL)
+    !byte 2 : lda .zvBar_BlitR      ; 3
+    !byte .OP_STA_R+2               ; 5
+    !byte .OP_STA_R+3               ; 5     @45     @54
+    !byte .OP_STA_R+4               ; 5     @50     @59
+    !byte 4 : dec .zvCurrentColumn  ; 5     @55*    @64* bei BL
+              bpl *+5               ; 3
+    !byte 3 : jmp .ExitBlitBarLoop  ;       Done: 6-4-4  L1/2 @10
+    !byte .OP_STA_R+5               ; 5     @63*
+    !byte .OP_STA_R+6               ; 5
+    !byte .OP_STA_R+7               ; 5 _40
+    !byte .OP_STA_R+0               ; 5 _45
+    !byte 1, opcode_LDA_IMM, .OP_MARK_DST ; 2
+    !byte .OP_STA_M+5               ; 5 _52 (+1 free)
+    !byte 0
+.cCS_BL2 = 35 
+.cCO_BL2_BRANCH = 14 
+.cCS_BL2_BRANCH_LEN = 3
+.cCO_BL2_MARK_DST = 27 
+.pCODE_BlitLine3:               ; 1@32 or 2@32 (or @41 when waiting for BL)
+    !byte .OP_STA_M+6               ; 5
+    !byte .OP_STA_M+7               ; 5
+    !byte .OP_STA_M+0               ; 5     @47     @56
+    !byte .OP_LDA_L+2               ; 4
+    !byte .OP_STA_L+4               ; 5     @51     @60
+    !byte .OP_STA_L+5               ; 5     @56     @65
+    !byte .OP_STA_L+6               ; 5     @61
+    !byte .OP_STA_L+7               ; 5     @66
+    !byte .OP_STA_L+0               ; 5  _49
+    !byte .OP_STA_L+1               ; 5    
+    !byte 2 : lda .zvBar_BlitR      ; 3 __52
+    !byte 0
+.cCS_BL3 = 32
+    !byte .OP_STA_M+1               ; 5 _20 @52     @61 ;; immer noch 2c zu früh
+    
+
+.pCODE_BlitLine4:  ;15b       ; 2@32 oder 3@32  Nach RestoreBL: @39 Nach BL: L1/2 @41
+    !byte      .OP_STA_R+1               ; 5    
+    !byte 1, opcode_LDA_16, .OP_MARK_REF2; 4
+    !byte      .OP_STA_M+1               ; 5    _10 @42       @49
+    !byte 8 :  ldx .zvCurrentColumn      ; 3         ENTER0:  @53
+               lda zpBarXPos,x           ; 4
+               clc                       ; 2         ENTER-7: @53 BAR4: @52+45
+               adc zvBar_ScrollX         ; 3         ENTER-9: @53 BAR4: @52+45
+               asl                       ; 2    _18   L3/4 @ 07/14
+    !byte      .OP_SPEC+0, 2, 3;bcc *+5  ; 3/2      _27/28   oder bcs für HI
+    !byte      opcode_JMP_16, .OP_IN2+2  ; -/3       -> jump behind following NOP in HI
+    !byte 2 :  nop                       ; 2    _5  __33
+    !byte      opcode_LDX_IMM, .OP_SPEC+1; 2
+    !byte 8 :  txs                       ; 2
+               ldx #6                    ; 2
+               sbx #0   ; sets carry     ; 2 
+               and #$F8                  ; 2
+               tay                       ; 2    _12 __45 + 7 RestoreBL ->52
+    !byte 0
+.cCS_BL4 = 33
+.cCO_BL4_BRANCH = 19
+.cCS_BL4_BRANCH_LEN = 3
+.cCO_BL4_SWITCH = 23 ; behind nop
+.cCO_BL4_ENTER0 = 9
+.cCO_BL4_ENTER7 = 13
+.cCO_BL4_ENTER9 = 14
+; BAR3 ENTER: Eingesprungen wird @52, es Zeile 62 war eine BL, das folgende DELAY benötigt 9c
+.cCO_BL4_ENTER_BL = 9; 2c earlier
+
+.pCODE_RestoreBLX: ; 5b
+    !byte 5 :  ldx zvVicControlV
+               stx vic_controlv    
+    !byte 0    
+.pCODE_RestoreBLA: ; 5b
+    !byte 5 :  lda zvVicControlV
+               sta vic_controlv    
+    !byte 0        
+.cCS_RESTOREBL = 5
+
+
+.pCODE_Idle52:
+    !byte .cCODE_Idle52_Len
+.CODE_Idle52_Len_Start:
+    stx .zvBar_RestoreX  ; 3
+    ldx #9
+-   dex
+    bne -   ; 9*5+1 = 46 
+    ldx .zvBar_RestoreX  ; 3
+.cCODE_Idle52_Len =  * - .CODE_Idle52_Len_Start
+    !byte 0
+.cCS_IDLE = 9
+    
+.pCODE_CheckBadLineDelay:                       ; enter @32
+    !byte .cCODE_CheckBadLineDelay_Len
+.CODE_CheckBadLineDelay_Len_Start:
+    dec+2 zvLineRepeatDelay     ; 6
+    bpl +                       ; 2/3           ; @40
+
+    inc zvLineRepeatDelay       ; 5 wieder auf 0
+    sta .zvBar_RestoreA         ; 3
+    lda zvVicControlVForcedBL   ; 3                 
+    sta vic_controlv            ; 4             ; @55 (*bonus cycle)
+    lda .zvBar_RestoreA         ; 3
+    lsr zvLineRepeatMask        ; 5             ; @63 (*bonus cycle2)
+    rol zvLineRepeatDelay       ; 5             ; @15 (+1)
+    
+    inc zvNOP                   ; 5
+    inc zvNOP                   ; 5
+    inc zvNOP                   ; 5
+    sec                         ; 2             ; @32
++                                               ; exit @46 when before BL, 17 cycles before catching up
+                                                ; -> #55 is always free cycle, may be the one before BL though                                                
+.cCODE_CheckBadLineDelay_Len =  * - .CODE_CheckBadLineDelay_Len_Start
+    !byte 0
+.cCS_DELAY = 27
+.cCO_CHECKBL_BRANCH = 5 
+.cCS_CHECKBL_BRANCH_LEN = .cCS_DELAY - .cCO_CHECKBL_BRANCH
+
+
+.pCODE_Sprite:
+    !byte 3 : jmp (zpDoSprites)
+    !byte 0
+.cCS_SPRITE = 3
+
+.cCS_LINES = .cCS_BL0 + .cCS_BL1 + .cCS_BL2 + .cCS_BL3 + .cCS_BL4 + .cCS_RESTOREBL;
+.cCS_LINESSPRITE = .cCS_LINES + .cCS_SPRITE;
+
+    
+.pCodeKeysLo:
+    !byte <.pCODE_BlitLine0, <.pCODE_BlitLine1, <.pCODE_BlitLine2, <.pCODE_BlitLine3, <.pCODE_BlitLine4
+    !byte <.pCODE_Idle52, <.pCODE_CheckBadLineDelay, <.pCODE_Sprite, <.pCODE_RestoreBLX, <.pCODE_RestoreBLA
+    !byte <.pCODE_ResetScreen
+    
+.pCodeKeysHi:
+    !byte >.pCODE_BlitLine0, >.pCODE_BlitLine1, >.pCODE_BlitLine2, >.pCODE_BlitLine3, >.pCODE_BlitLine4
+    !byte >.pCODE_Idle52, >.pCODE_CheckBadLineDelay, >.pCODE_Sprite, >.pCODE_RestoreBLX, >.pCODE_RestoreBLA
+    !byte >.pCODE_ResetScreen
+    
+.cCODE_Line0 = 0    
+.cCODE_Line1 = 1    
+.cCODE_Line2 = 2   
+.cCODE_Line3 = 3
+.cCODE_Line4 = 4
+.cCODE_Idle52 = 5
+.cCODE_Delay = 6
+.cCODE_Sprite = 7
+.cCODE_RestoreBLX = 8
+.cCODE_RestoreBLA = 9
+.cCODE_ResetScreen = 10
+
+.cCODE_NEXTBAR = 15
+
+.pCODE_BARS:
+    ; Start mit Bar2_R nach Sprite return
+    !byte (.cCODE_Line2 << 4) | .cCODE_Line3
+    !byte (.cCODE_RestoreBLX << 4) | .cCODE_Line4
+.cCO_BAR2_2 = 0    
+.cCS_BAR2_2 = .cCS_BL2 + .cCS_BL3 + .cCS_BL4 + .cCS_RESTOREBL
+.cCO_BAR2_RTS = .cCO_BAR2_2
+.cCO_BAR2_BL2 = .cCO_BAR2_RTS
+.cCO_BAR2_BL4 = .cCO_BAR2_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+    
+    ; Bar1 : V=0 -> BL65, enter @63+32 for Line0, zwei Zeilen Vorlauf : @61+11 OK
+    !byte (.cCODE_NEXTBAR << 4) | .cCODE_Line0
+    !byte (.cCODE_Delay << 4) | .cCODE_Line1    
+    !byte (.cCODE_Sprite << 4) | .cCODE_Line2
+    !byte (.cCODE_Line3 << 4) | .cCODE_RestoreBLX
+    !byte (.cCODE_Line4 << 4) | .cCODE_NEXTBAR
+.cCO_BAR1 = .cCS_BAR2_2   
+.cCS_BAR1 = .cCS_DELAY + .cCS_LINESSPRITE
+.cCO_BAR1_RTS = .cCO_BAR1 + .cCS_BL0 + .cCS_DELAY + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR1_BL2 = .cCO_BAR1_RTS
+.cCO_BAR1_BL4 = .cCO_BAR1_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+.cCO_BAR1_CHECKBL = .cCO_BAR1 + .cCS_BL0
+    
+    ; Bar0
+    !byte (.cCODE_Line0 << 4) | .cCODE_Line1
+    !byte (.cCODE_Delay << 4) | .cCODE_Sprite
+    !byte (.cCODE_Line2 << 4) | .cCODE_Line3
+    !byte (.cCODE_RestoreBLX << 4) | .cCODE_Line4
+.cCO_BAR0 = .cCO_BAR1 + .cCS_BAR1
+.cCS_BAR0 = .cCS_DELAY + .cCS_LINESSPRITE
+.cCO_BAR0_RTS = .cCO_BAR0 + .cCS_BL0 + .cCS_BL1 + .cCS_DELAY + .cCS_SPRITE
+.cCO_BAR0_BL2 = .cCO_BAR0_RTS
+.cCO_BAR0_BL4 = .cCO_BAR0_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+.cCO_BAR0_CHECKBL = .cCO_BAR0 + .cCS_BL0 + .cCS_BL1
+
+    ; Bar7
+    !byte (.cCODE_NEXTBAR << 4) | .cCODE_Line0
+    !byte (.cCODE_Line1 << 4) | .cCODE_Sprite    
+    !byte (.cCODE_Delay << 4) | .cCODE_Line2
+    !byte (.cCODE_Line3 << 4) | .cCODE_RestoreBLX
+    !byte (.cCODE_Line4 << 4) | .cCODE_NEXTBAR
+.cCO_BAR7 = .cCO_BAR0 + .cCS_BAR0
+.cCS_BAR7 = .cCS_DELAY + .cCS_LINESSPRITE
+.cCO_BAR7_RTS = .cCO_BAR7 + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR7_BL2 = .cCO_BAR7_RTS + .cCS_DELAY
+.cCO_BAR7_BL4 = .cCO_BAR7_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+.cCO_BAR7_CHECKBL = .cCO_BAR7_RTS + .cCS_BL1
+        
+    ; Bar6 : V=5 -> BL60, enter @63+32 for Line0, zwei Zeilen Vorlauf : @61+11 OK
+    !byte (.cCODE_Line0 << 4) | .cCODE_Line1
+    !byte (.cCODE_Sprite << 4) | .cCODE_Line2
+    !byte (.cCODE_Delay << 4) | .cCODE_Line3
+    !byte (.cCODE_RestoreBLX << 4) | .cCODE_Line4
+.cCO_BAR6 = .cCO_BAR7 + .cCS_BAR7
+.cCS_BAR6 = .cCS_DELAY + .cCS_LINESSPRITE
+.cCO_BAR6_RTS = .cCO_BAR6 + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR6_BL2 = .cCO_BAR6_RTS
+.cCO_BAR6_BL4 = .cCO_BAR6_BL2 + .cCS_DELAY + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+.cCO_BAR6_CHECKBL = .cCO_BAR6_RTS + .cCS_BL2
+
+    ; Bar5 : V=5 -> BL61, enter @63+32 for Line0, zwei Zeilen Vorlauf : @61+11  GEHT NICHT! Also @60+11 + DELAY_CHECK / 43 BL
+    !byte (.cCODE_NEXTBAR << 4) | .cCODE_Line0
+    !byte (.cCODE_Line1 << 4) | .cCODE_Sprite
+    !byte (.cCODE_Line2 << 4) | .cCODE_Line3
+    !byte (.cCODE_Delay << 4) | .cCODE_Line4
+    !byte (.cCODE_RestoreBLA << 4) | .cCODE_NEXTBAR
+.cCO_BAR5 = .cCO_BAR6 + .cCS_BAR6
+.cCS_BAR5 = .cCS_DELAY + .cCS_LINESSPRITE
+.cCO_BAR5_RTS = .cCO_BAR5 + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR5_BL2 = .cCO_BAR5_RTS
+.cCO_BAR5_BL4 = .cCO_BAR5_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_DELAY
+.cCO_BAR5_CHECKBL = .cCO_BAR5_RTS + .cCS_BL2 + .cCS_BL3
+
+    ; Bar4 : V=6 -> BL62, enter @63+32 for Line0, zwei Zeilen Vorlauf : @61+11  GEHT NICHT! Also @60+11 + DELAY_CHECK / 43 BL
+    !byte (.cCODE_Line0 << 4) | .cCODE_Line1
+    !byte (.cCODE_Sprite << 4) | .cCODE_Line2    
+    !byte (.cCODE_Line3 << 4) | .cCODE_RestoreBLX
+    !byte (.cCODE_Line4 << 4) | .cCODE_Delay
+.cCO_BAR4 = .cCO_BAR5 + .cCS_BAR5
+.cCS_BAR4 = .cCS_LINESSPRITE + .cCS_DELAY
+.cCO_BAR4_RTS = .cCO_BAR4 + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR4_BL2 = .cCO_BAR4_RTS
+.cCO_BAR4_BL4 = .cCO_BAR4_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+        
+    ; Bar3 : V=7 -> BL63, enter @62+32 for Delay, @63+32 for Line0
+    !byte (.cCODE_NEXTBAR << 4) | .cCODE_Line0
+    !byte (.cCODE_Line1 << 4) | .cCODE_Sprite
+    !byte (.cCODE_Idle52 << 4) | .cCODE_Line2    
+    !byte (.cCODE_Line3 << 4) | .cCODE_RestoreBLX
+    !byte (.cCODE_Line4 << 4) | .cCODE_NEXTBAR
+.cCO_BAR3 = .cCO_BAR4 + .cCS_BAR4
+.cCS_BAR3 = .cCS_LINESSPRITE + .cCS_IDLE
+.cCO_BAR3_RTS = .cCO_BAR3 + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR3_BL2 = .cCO_BAR3_RTS + .cCS_IDLE
+.cCO_BAR3_BL4 = .cCO_BAR3_BL2 + .cCS_BL2 + .cCS_BL3 + .cCS_RESTOREBL
+.cCO_BAR3_CHECKBL = .cCO_BAR3
+
+    ; Bar2 : V=0 -> BL64, enter @63+32 for Delay, zwei Zeilen Vorlauf : @61+11 OK
+    !byte (.cCODE_Delay << 4) | .cCODE_Line0
+    !byte (.cCODE_Line1 << 4) | .cCODE_Sprite
+    !byte (.cCODE_NEXTBAR << 4) | .cCODE_NEXTBAR
+.cCO_BAR2_1 = .cCO_BAR3 + .cCS_BAR3
+.cCS_BAR2_1 = .cCS_DELAY + .cCS_BL0 + .cCS_BL1 + .cCS_SPRITE
+.cCO_BAR2_BL1 = .cCO_BAR2_1 + .cCS_DELAY + .cCS_BL0
+.cCO_BAR2_CHECKBL = .cCO_BAR2_1
+
+.BarCodeBase_L = .pOutCode + $0000
+.BarSwitch2_L = .BarCodeBase_L + .cCO_BAR2_BL4 + .cCO_BL4_SWITCH
+.BarSwitch1_L = .BarCodeBase_L + .cCO_BAR1_BL4 + .cCO_BL4_SWITCH
+.BarSwitch0_L = .BarCodeBase_L + .cCO_BAR0_BL4 + .cCO_BL4_SWITCH
+.BarSwitch7_L = .BarCodeBase_L + .cCO_BAR7_BL4 + .cCO_BL4_SWITCH
+.BarSwitch6_L = .BarCodeBase_L + .cCO_BAR6_BL4 + .cCO_BL4_SWITCH
+.BarSwitch5_L = .BarCodeBase_L + .cCO_BAR5_BL4 + .cCO_BL4_SWITCH
+.BarSwitch4_L = .BarCodeBase_L + .cCO_BAR4_BL4 + .cCO_BL4_SWITCH
+.BarSwitch3_L = .BarCodeBase_L + .cCO_BAR3_BL4 + .cCO_BL4_SWITCH
+
+.RtsSprite2L = .BarCodeBase_L + .cCO_BAR2_RTS
+.RtsSprite1L = .BarCodeBase_L + .cCO_BAR1_RTS
+.RtsSprite0L = .BarCodeBase_L + .cCO_BAR0_RTS
+.RtsSprite7L = .BarCodeBase_L + .cCO_BAR7_RTS
+.RtsSprite6L = .BarCodeBase_L + .cCO_BAR6_RTS
+.RtsSprite5L = .BarCodeBase_L + .cCO_BAR5_RTS
+.RtsSprite4L = .BarCodeBase_L + .cCO_BAR4_RTS
+.RtsSprite3L = .BarCodeBase_L + .cCO_BAR3_RTS
+
+.BarEnter2 = .BarCodeBase_L + .cCO_BAR3_BL4 + .cCO_BL4_ENTER0
+.BarEnter1 = .BarCodeBase_L + .cCO_BAR2_BL4 + .cCO_BL4_ENTER0
+.BarEnter0 = .BarCodeBase_L + .cCO_BAR1_BL4 + .cCO_BL4_ENTER0
+.BarEnter7 = .BarCodeBase_L + .cCO_BAR0_BL4 + .cCO_BL4_ENTER0
+.BarEnter6 = .BarCodeBase_L + .cCO_BAR7_BL4 + .cCO_BL4_ENTER0
+.BarEnter5 = .BarCodeBase_L + .cCO_BAR6_BL4 + .cCO_BL4_ENTER0
+.BarEnter4 = .BarCodeBase_L + .cCO_BAR5_BL4 + .cCO_BL4_ENTER7
+.BarEnter3 = .BarCodeBase_L + .cCO_BAR4_BL4 + .cCO_BL4_ENTER9
+
+.BarCodeBase_R = .BarCodeBase_L + .cCO_BAR2_1 + .cCS_BAR2_1
+.BarSwitch2_R = .BarCodeBase_R + .cCO_BAR2_BL4 + .cCO_BL4_SWITCH
+.BarSwitch1_R = .BarCodeBase_R + .cCO_BAR1_BL4 + .cCO_BL4_SWITCH
+.BarSwitch0_R = .BarCodeBase_R + .cCO_BAR0_BL4 + .cCO_BL4_SWITCH
+.BarSwitch7_R = .BarCodeBase_R + .cCO_BAR7_BL4 + .cCO_BL4_SWITCH
+.BarSwitch6_R = .BarCodeBase_R + .cCO_BAR6_BL4 + .cCO_BL4_SWITCH
+.BarSwitch5_R = .BarCodeBase_R + .cCO_BAR5_BL4 + .cCO_BL4_SWITCH
+.BarSwitch4_R = .BarCodeBase_R + .cCO_BAR4_BL4 + .cCO_BL4_SWITCH
+.BarSwitch3_R = .BarCodeBase_R + .cCO_BAR3_BL4 + .cCO_BL4_SWITCH
+
+.RtsSprite2R = .BarCodeBase_R + .cCO_BAR2_RTS
+.RtsSprite1R = .BarCodeBase_R + .cCO_BAR1_RTS
+.RtsSprite0R = .BarCodeBase_R + .cCO_BAR0_RTS
+.RtsSprite7R = .BarCodeBase_R + .cCO_BAR7_RTS
+.RtsSprite6R = .BarCodeBase_R + .cCO_BAR6_RTS
+.RtsSprite5R = .BarCodeBase_R + .cCO_BAR5_RTS
+.RtsSprite4R = .BarCodeBase_R + .cCO_BAR4_RTS
+.RtsSprite3R = .BarCodeBase_R + .cCO_BAR3_RTS
+
+.pBar2MarkDst_L = .BarCodeBase_L + .cCO_BAR2_BL2 + .cCO_BL2_MARK_DST
+.pBar2MarkDst_R = .BarCodeBase_R + .cCO_BAR2_BL2 + .cCO_BL2_MARK_DST
+
+.pBar2MarkSrc_L = .BarCodeBase_L + .cCO_BAR2_BL1 + .cCO_BL1_MARK_SRC
+.pBar2MarkSrc_R = .BarCodeBase_R + .cCO_BAR2_BL1 + .cCO_BL1_MARK_SRC
+
+.pBarRtsStackData: ; auf dem Stack liegt immer zieladdresse-1
+    !word .RtsSprite1L-1, .RtsSprite0L-1, .RtsSprite7L-1, .RtsSprite6L-1
+    !word .RtsSprite5L-1, .RtsSprite4L-1, .RtsSprite3L-1, .RtsSprite2L-1
+    !word .RtsSprite1R-1, .RtsSprite0R-1, .RtsSprite7R-1, .RtsSprite6R-1
+    !word .RtsSprite5R-1, .RtsSprite4R-1, .RtsSprite3R-1, .RtsSprite2R-1
+
+.pIn2Data:
+    !word .BarSwitch2_R, .BarSwitch1_R, .BarSwitch0_R, .BarSwitch7_R
+    !word .BarSwitch6_R, .BarSwitch5_R, .BarSwitch4_R, .BarSwitch3_R
+    !word .BarSwitch2_L, .BarSwitch1_L, .BarSwitch0_L, .BarSwitch7_L
+    !word .BarSwitch6_L, .BarSwitch5_L, .BarSwitch4_L, .BarSwitch3_L    
+!if (>.pIn2Data != >*){
+    !error "PAGE BREAK: ",.pIn2Data, " - ", *
+}
+    
+    
+
+.pCODE_ResetScreen:    
+    !byte 3 : sta .pFirstVisibleCharBase
+    !byte .OP_REPEAT+4 : !word 311 : !byte 1,2 ; REPEAT pIn-4 311 times, increase pIn-4 +2 by 1
+    !byte 1 : rts
+    
+.pCODE_AnimateBars:
+    !byte 7 : sbx #3
+              ldy pSinBarTab,x
+              sty zpBarXPos
+    !byte .OP_REPEAT+8 : !word 25 : !byte 1,7
+    !byte 1 : rts
+    
+.pCODE_BigScroll_ChangeColorCode:
+    !byte 7 : lda #8
+              sta zvCurrentColorFrontChars
+              dex
+              dex
+              rts
+    !byte .OP_REPEAT+8 : !word 7 : !byte 1,2
+
+.cLastChangeColorCode = BigScroll_ChangeColorCode0+(7*cBigScroll_ChangeColorCodeSize)
+!if (>BigScroll_ChangeColorCode0 != >.cLastChangeColorCode){
+    !error "Illegal Pagebreak"
+}    
+    
+.BigScroll_CCC0_RTS = BigScroll_ChangeColorCode0-1
+.BigFontCode_NOP = .BigScroll_CCC0_RTS + 4
+.pCODE_BigScroll_ChangeColorOp:
+    !byte 10
+    !byte <.BigScroll_CCC0_RTS, >.BigScroll_CCC0_RTS
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP
+    !byte <.BigFontCode_NOP, >.BigFontCode_NOP    
+    !byte .OP_REPEAT+11 : !word 7 : !byte 7,1
+    !byte 0
+
+.cLastChangeColorOp = BigScroll_ChangeColorOp0+(7*cBigScroll_ChangeColorOpSize)
+!if (>BigScroll_ChangeColorOp0 != >.cLastChangeColorOp){
+    !error "Illegal Pagebreak"
+}    
+
+    
+!warn "GenerateBarCode Start: ", .DEBUG_BARCODE_START, " End: ", *, " Size: ", * - .DEBUG_BARCODE_START
+!src "4k_kefrens_columns_code_checks.a"
+
+.DEBUG_BARCODEEX_START = *
+
+.pBarCodePixelData: 
+;; Zugriff erfolgt nur in Zweierschritten, deswegen interleaved abgelegt
+pBarSrcL0:  ;; OR'ed to the Background
+pBarSrcR0 = pBarSrcL0+1
+    !byte %00111111, %00000000, %00001111, %11000000, %00000011, %11110000, %00000000, %11111100
+pBarSrcL1:  ;; OR'ed to the Previous
+pBarSrcR1 = pBarSrcL1+1
+    !byte %11111111, %11000000, %00111111, %11110000, %00001111, %11111100, %00000011, %11111111
+pBarSrcL2:  ;; AND'ed to the Previous
+pBarSrcR2 = pBarSrcL2+1   
+    !byte %01111110, %01111111, %11011111, %11011111, %11110111, %11110111, %11111101, %10111101
+pBarSrcM2:  ; pBarSrc 0-1 M are always $FF
+    !byte %10101111, 0, %10101011, 0, %11101010, 0, %11111010
+!if (>* != >.pBarCodePixelData){
+    !error "ILLEGAL PAGE BOUNDARY", .pBarCodePixelData, " - ", *
+}
+    
+;; Irq für die Transition nach Columns
+;; Triggert IMMER in Zeile 60+11
+Irq_StartColumns:  ; triggers L60@+11, delay 7-10 -> @18-21     BL60: L61+[9-12]
+    lda #39                     ;  2    
+    ldy zvVicControlV           ;  3
+    cpy #cControlVFlags+4       ;  2
+    bne +                       ; 3/2
+    lda #47+1                   ;   2   ; 1 cycle weniger warten, um den Laufzeitunterschied auszugleichen
++   sec                         ; 2 2  _12/13  @L60+[30-33] BL60: @L60+[31-34] +43-52 ->@L61+[22-29]
+
+    sbc cia2_ta_lo              ; 4 read    60@34-41    BL60: 61@26-33  -> A=[33-40]   BL59: A=[41-48]
+    sta *+4                     ; 4 write   60@38-45    BL60: 61@30-37
+    bcs *+2:                    ; 3 -> @L60+[47-54]
+    lda #opcode_LDA_IMM
+    lda #opcode_LDA_IMM
+    lda opcode_NOP              ; _9        60@52->61@00    BL60/61: 61@43
+
+    tsx                         ; 2
+    stx zvIrqRestoreStack       ; 3     _5  61@5       BL60/61: 61@48  @L60+[18-25]
+        
+    ; Bei einem Scroll von 4-7 ist die Badline irgendwo in L60-63.
+    ; Dann werden 43c durch die BL verbraten.
+    ; Sonst müssen wir das hier selbst tun
+    cpy #cControlVFlags+4       ; 2
+    bcs +                       ; 3     -> 5(+43)
+    ldx #8
+-   dex
+    bne -             ; 41
+    pha               ; _44   ->
++                               ; __48          62@1    *(oder noch 61@10, bei BL 62/63)
+!if (>* != >(*-6)){
+    !error "PAGE BREAK"
+}
+    pha : pha : pha : pla : pla     ; NOP_17
+
+    inc zvAnimationFrameCounter     ; 5
+    lda #$FF                        ; 2
+    sta zvLineRepeatMask            ; 3
+    
+    ; ENTER @62@26
+    lda zvScrollY               ; 3
+    and #7                      ; 2
+    asl                         ; 2
+    adc #<.pJmpEnterBars        ; 2
+    sta .vJmpEnterBarsLo        ; 4
+    ldx #cCountCopperBars       ; 2
+    stx .zvCurrentColumn        ; 3
+    lda zpBarXPos,x             ; 4
+.vJmpEnterBarsLo = *+1
+    jmp (.pJmpEnterBars)        ; 5 _27         muss -> 62@53    
+    
+
+.ExitBlitBarLoop: ; Enter L1/2 @10
+
+    ; hier stehen noch die sprite-ptr drin..?
+    ; frühestens L6 + 12
+    
+    ldx zvIrqRestoreStack
+    txs
+    lda cia2_icr            ; 4 ACK CIA
+    
+    jsr InitNextFrame
+    rti
+    
+.pJmpEnterBars:
+    !word .BarEnter2, .BarEnter1, .BarEnter0, .BarEnter7, .BarEnter6, .BarEnter5, .BarEnter4, .BarEnter3 
+!if (>.pJmpEnterBars != >*){
+    !error "PAGEBREAK: ", .pJmpEnterBars, " - ", *
+}
+    
+!warn "ExecuteBarCode Start: ", .DEBUG_BARCODEEX_START, " End: ", *, " Size: ", * - .DEBUG_BARCODEEX_START
+
+
+
+
+
+
+
+
