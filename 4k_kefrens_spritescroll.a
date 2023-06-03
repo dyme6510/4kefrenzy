@@ -465,18 +465,23 @@ cSpriteText_PauseMask = $0F
 SpriteText_ParseNextCmd:
 .vSpriteText_DstPtr = *+1
     ldx #12 ; current last blit index
-.vSpriteText_SrcPtr = *+1
-    ldy #$FF ; current text offset
+
 .SpriteText_Read:
-    iny
-    lda DATA_SpriteText,y
+	inc .vSpriteTextPtr
+	bne +
+	inc .vSpriteTextPtr+1
++   
+.vSpriteTextPtr = *+1	
+    lda DATA_SpriteText-1
     bmi .SpriteText_ScrollCommand
     cmp #cSpriteScroll_EOT
     bne +
-    ldy #(DATA_SpriteText_Loop-DATA_SpriteText-1)
-    bpl .SpriteText_Read
-+   sty .vSpriteText_SrcPtr
-    cmp #cSpriteText_ColorCmd
+	lda #<(DATA_SpriteText_Loop-1)
+	sta .vSpriteTextPtr
+	lda #>(DATA_SpriteText_Loop-1)
+	sta .vSpriteTextPtr+1
+    bne .SpriteText_Read
++   cmp #cSpriteText_ColorCmd
     bcs .SpriteText_ColorCmd
     cmp #cSpriteText_SpaceCmd
     bcs .SpriteText_SpaceCmd

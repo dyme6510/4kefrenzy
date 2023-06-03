@@ -13,68 +13,144 @@ DATA_BigText:
     !byte cScrollLeft_CMD_Color + 2
     !scr "AGAIN!  "
     !byte cScrollLeft_CMD_Color + 4
-    !scr "What'ya say dyme? Kefrens bars"
+    !scr "What'ya say dyme? Kefrens"
     !byte cScrollLeft_CMD_Color + 5
     !scr "AND"
     !byte cScrollLeft_CMD_Color + 4
-    !scr "a big-ass Scroller?  Now I've seen it all!    "
+    !scr "a big-ass Scroller?  NOW I've seen all!    "
     !byte cScrollLeft_CMD_Speed + 2
     !byte cScrollLeft_CMD_Color + 6
-    !scr "NO!     "
+    !scr "NO!  "
     !byte cScrollLeft_CMD_Speed + 8
     !byte cScrollLeft_CMD_Color + 4
     !scr "There's also greetings!     "
-    !scr "some specs: "
-    !byte cScrollLeft_CMD_Color + 4
 DATA_BigText_Loop:
-    !scr "25 "    
-    !byte cScrollLeft_CMD_Speed + 6
+    !scr "Some specs: "
+    !byte cScrollLeft_CMD_Color + 4
+    !byte cScrollLeft_CMD_Color + 2
+    !scr "25"
+    !byte cScrollLeft_CMD_Color + 5
     !scr "Bars "
     !byte cScrollLeft_CMD_Speed + 8
-    !byte cScrollLeft_CMD_Color + 4
     !byte cScrollLeft_CMD_Color + 5
     !scr "AND"
     !byte cScrollLeft_CMD_Color + 4
-    !scr "a 16 character lines horizontal scroller"
-    !byte cScrollLeft_CMD_Color + 5
-    !scr "AND"
-    !byte cScrollLeft_CMD_Color + 4
-    !scr "a vertical sprite scroller (4 sprites per raster line)"
-    !byte cScrollLeft_CMD_Color + 5
-    !scr "AND"
-    !byte cScrollLeft_CMD_Color + 4
-    !scr "a generic music player (with some randomization)"
+    !scr "a"
     !byte cScrollLeft_CMD_Color + 2
-    !scr "all in 4kb!        "
+	!scr "16"
     !byte cScrollLeft_CMD_Color + 4
+    !scr "charline horizontal scroller"
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a vertical sprite scroller ("
+    !byte cScrollLeft_CMD_Color + 2
+	!scr "4"
+    !byte cScrollLeft_CMD_Color + 4
+	!scr "sprites per rasterline)"
+    !byte cScrollLeft_CMD_Color + 5
+    !scr "AND"
+    !byte cScrollLeft_CMD_Color + 4
+    !scr "a generative (and cheesy) music tune in less than"
+    !byte cScrollLeft_CMD_Color + 2
+	!scr "<600>"
+    !byte cScrollLeft_CMD_Color + 4
+	!scr "bytes   *  * ** *  *   "
     !byte cEOT_BigText
 
 DATA_SpriteText:
-    !byte cSpriteText_SpaceCmd + 47
-    !byte cSpriteText_SpaceCmd + 47
-    !byte cSpriteText_SpaceCmd + 47
-    !byte cSpriteText_SpaceCmd + 47
-    !byte cSpriteText_SpaceCmd + 47
-    !byte cSpriteText_SpaceCmd + 47
+    !byte cSpriteText_SpaceCmd + 42
+    !byte cSpriteText_SpaceCmd + 42
+    !byte cSpriteText_SpaceCmd + 42
+    !byte cSpriteText_SpaceCmd + 42
+    !byte cSpriteText_SpaceCmd + 42
+    !byte cSpriteText_SpaceCmd + 42
 DATA_SpriteText_Loop:
     !byte cSpriteText_SpaceCmd + 2
-    !byte cSpriteText_ColorCmd + 5
-    !scr "all the best and greetings to everybody makes the scene so great"
-    !byte cSpriteText_SpaceCmd + 8
+    !byte cSpriteText_ColorCmd + 6
+    !scr "onslaught"
     !byte cSpriteText_ColorCmd + 3
     !scr "desire"
-    !byte cSpriteText_ColorCmd + 6
-    !scr "atlantis"
+    !byte cSpriteText_ColorCmd + 15
+    !scr "*"
     !byte cSpriteText_ColorCmd + 9
-    !scr "onslaught"
-    !byte cSpriteText_ColorCmd + 2
-    !scr "panda design"
-    !byte cSpriteText_ColorCmd + 8
-    !scr "plush"
-    !byte cSpriteText_ColorCmd + 7
-    !scr "bonzai"
+    !scr "arise"
+    !byte cSpriteText_ColorCmd + 12
+    !scr "artline design"
+    !byte cSpriteText_ColorCmd + 14
+    !scr "atlantis"
+    !byte cSpriteText_ColorCmd + 4
+    !scr "booze design"
     !byte cSpriteText_ColorCmd + 5
-    !byte cSpriteText_SpaceCmd + 12
+    !scr "bonzai"
+    !byte cSpriteText_ColorCmd + 9
+    !scr "camelot"
+    !byte cSpriteText_ColorCmd + 2
+    !scr "censor design"
+    !byte cSpriteText_ColorCmd + 14
+    !scr "crest"
+    !byte cSpriteText_ColorCmd + 10
+    !scr "delysid"
+    !byte cSpriteText_ColorCmd + 4
+    !scr "excess"
+    !byte cSpriteText_ColorCmd + 12
+    !scr "extend"
+    !byte cSpriteText_ColorCmd + 5
+    !scr "f4cg"
+    !byte cSpriteText_ColorCmd + 15
+    !scr "fairlight"
+    !byte cSpriteText_ColorCmd + 4
+    !scr "focus"
+    !byte cSpriteText_ColorCmd + 10	
+    !scr "hokuto force"
+    !byte cSpriteText_ColorCmd + 5
+    !scr "lethargy"
+    !byte cSpriteText_ColorCmd + 9
+    !scr "lft"
+    !byte cSpriteText_ColorCmd + 11
+    !scr "mayday!"
+    !byte cSpriteText_ColorCmd + 14
+    !scr "megastyle"
+    !byte cSpriteText_ColorCmd + 4
+    !scr "offence"
+    !byte cSpriteText_ColorCmd + 3
+    !scr "oxyron"
+    !byte cSpriteText_ColorCmd + 9
+    !scr "panda design"
+    !byte cSpriteText_ColorCmd + 10
+    !scr "plush"
+    !byte cSpriteText_ColorCmd + 3
+    !scr "pretzel logic"
+    !byte cSpriteText_ColorCmd + 14
+    !scr "padua"
+    !byte cSpriteText_ColorCmd + 12
+    !scr "reflex"
+    !byte cSpriteText_ColorCmd + 2
+    !scr "samar"
+    !byte cSpriteText_ColorCmd + 9
+    !scr "silicon ltd."
+    !byte cSpriteText_ColorCmd + 5
+    !scr "success&trc"
+    !byte cSpriteText_ColorCmd + 3
+    !scr "tempest"
+    !byte cSpriteText_ColorCmd + 15
+    !scr "triad"
+    !byte cSpriteText_ColorCmd + 2
+    !scr "trsi"
+    !byte cSpriteText_ColorCmd + 14
+    !scr "xenon"
+    !byte cSpriteText_ColorCmd + 15
+    !byte cSpriteText_SpaceCmd + 2
+    !scr "*"
+    !byte cSpriteText_ColorCmd + 12
+    !scr "*"
+    !byte cSpriteText_ColorCmd + 11
+    !scr "* ** *"
+    !byte cSpriteText_ColorCmd + 12
+    !scr "*"
+    !byte cSpriteText_ColorCmd + 15
+    !scr "*"
     !byte cSpriteScroll_EOT
     
+	
 !warn "SpriteText Length: ", * - DATA_SpriteText   
